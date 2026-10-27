@@ -269,9 +269,16 @@ int main(int argc, const char *argv[]) {
       if (err == kCGErrorSuccess && cgConfig) {
         err = SLSConfigureDisplayEnabled(cgConfig, resultID, true);
         fprintf(stderr, "[vd_helper] SLSConfigureDisplayEnabled(%u, true): %d\n", resultID, err);
-        CGDirectDisplayID mainDisplay = CGMainDisplayID();
-        size_t mainWidth = CGDisplayPixelsWide(mainDisplay);
-        SLSConfigureDisplayOrigin(cgConfig, resultID, (int32_t)mainWidth, 0);
+        // Right of the rightmost active display, so several virtual displays do not overlap
+        CGFloat rightEdge = CGRectGetMaxX(CGDisplayBounds(CGMainDisplayID()));
+        CGDirectDisplayID activeDisplays[32];
+        uint32_t activeCount = 0;
+        if (CGGetActiveDisplayList(32, activeDisplays, &activeCount) == kCGErrorSuccess) {
+          for (uint32_t i = 0; i < activeCount; i++) {
+            if (activeDisplays[i] != resultID) rightEdge = MAX(rightEdge, CGRectGetMaxX(CGDisplayBounds(activeDisplays[i])));
+          }
+        }
+        SLSConfigureDisplayOrigin(cgConfig, resultID, (int32_t)rightEdge, 0);
         CGError completeErr = SLSCompleteDisplayConfiguration(cgConfig, kCGConfigureForSession, 0);
         fprintf(stderr, "[vd_helper] SLSCompleteDisplayConfiguration: %d\n", completeErr);
       }
@@ -362,8 +369,9 @@ int main(int argc, const char *argv[]) {
     fprintf(stdout, "%u\n", resultID);
     fflush(stdout);
 
-    // Keep alive via CFRunLoop
-    while (!shouldExit) {
+    // Keep alive via CFRunLoop, until signalled or until Sunshine is gone and we were reparented
+    const pid_t parentPid = getppid();
+    while (!shouldExit && getppid() == parentPid) {
       CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, false);
     }
 
