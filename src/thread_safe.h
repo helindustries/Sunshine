@@ -720,9 +720,9 @@ namespace safe {
     construct_f _construct;
     destruct_f _destruct;
 
-    std::array<std::uint8_t, sizeof(element_type)> _object_buf;
+    alignas(element_type) std::array<std::uint8_t, sizeof(element_type)> _object_buf;
 
-    std::uint32_t _count;
+    std::uint32_t _count {};
     std::mutex _lock;
   };
 
