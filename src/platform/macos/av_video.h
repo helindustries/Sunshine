@@ -87,5 +87,6 @@ typedef bool (^FrameCallbackBlock)(CMSampleBufferRef);
  * @return Capture status reported to the streaming pipeline.
  */
 - (dispatch_semaphore_t)capture:(FrameCallbackBlock)frameCallback;
+- (void)stopCapture;
 
 @end

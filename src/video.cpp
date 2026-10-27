@@ -1436,10 +1436,7 @@ namespace video {
       {},  // HDR-specific options
       {},  // YUV444 SDR-specific options
       {},  // YUV444 HDR-specific options
-      {
-        // Fallback options
-        {"flags"s, "-low_delay"},
-      },
+      {},  // Fallback options
       "h264_videotoolbox"s,
       {},  // capabilities
     },

@@ -1495,6 +1495,30 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### virtual_display
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Create a virtual display at the resolution and refresh rate the client asks for, and stream
+            that display instead of a physical one. Applies to macOS.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            virtual_display = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### max_bitrate
 
 <table>

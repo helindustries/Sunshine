@@ -8,6 +8,16 @@ const config = ref(props.config)
 </script>
 
 <template>
+  <!--virtual_display-->
+  <div class="mb-3">
+    <label for="virtual_display" class="form-label">{{ $t("config.virtual_display") }}</label>
+    <select id="virtual_display" class="form-select" v-model="config.virtual_display">
+      <option value="enabled">{{ $t("_common.enabled") }}</option>
+      <option value="disabled">{{ $t("_common.disabled") }}</option>
+    </select>
+    <div class="form-text">{{ $t("config.virtual_display_desc") }}</div>
+  </div>
+
   <!--max_bitrate-->
   <div class="mb-3">
     <label for="max_bitrate" class="form-label">{{ $t("config.max_bitrate") }}</label>

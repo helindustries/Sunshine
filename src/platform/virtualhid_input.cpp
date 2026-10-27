@@ -23,6 +23,10 @@
 #include "src/logging.h"
 #include "virtualhid_input.h"
 
+#ifdef __APPLE__
+  #include "src/platform/macos/hid_gamepad_bridge.h"
+#endif
+
 using namespace std::literals;
 
 namespace platf::virtualhid {
@@ -1192,19 +1196,41 @@ namespace platf {
   }
 
 #ifndef _WIN32
+  // On macOS an unlicensed libvirtualhid creates no gamepad; an IOHIDUserDevice takes the index
+  // instead, which works only with SIP disabled
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
-    return virtualhid::alloc_gamepad(virtualhid::get_input_context(input), id, metadata, std::move(feedback_queue));
+    auto result = virtualhid::alloc_gamepad(virtualhid::get_input_context(input), id, metadata, std::move(feedback_queue));
+  #ifdef __APPLE__
+    if (result != 0 && hid_gamepad_bridge::alloc(id.globalIndex)) {
+      result = 0;
+    }
+  #endif
+    return result;
   }
 
   int rebind_gamepad(input_t &input, const gamepad_id_t &id, feedback_queue_t feedback_queue) {
+  #ifdef __APPLE__
+    if (hid_gamepad_bridge::owns(id.globalIndex)) {
+      return 0;
+    }
+  #endif
     return virtualhid::rebind_gamepad(virtualhid::get_input_context(input), id, std::move(feedback_queue));
   }
 
   void free_gamepad(input_t &input, int nr) {
+  #ifdef __APPLE__
+    hid_gamepad_bridge::free(nr);
+  #endif
     virtualhid::free_gamepad(virtualhid::get_input_context(input), nr);
   }
 
   void gamepad_update(input_t &input, int nr, const gamepad_state_t &gamepad_state) {
+  #ifdef __APPLE__
+    if (hid_gamepad_bridge::owns(nr)) {
+      hid_gamepad_bridge::update(nr, gamepad_state);
+      return;
+    }
+  #endif
     virtualhid::gamepad_update(virtualhid::get_input_context(input), nr, gamepad_state);
   }
 

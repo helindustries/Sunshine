@@ -40,6 +40,7 @@
 #include "misc.h"
 #include "src/boost_process_compat.h"
 #include "src/config.h"
+#include "virtual_display.h"
 #include "src/entry_handler.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
@@ -519,7 +520,19 @@ namespace platf {
   }
 
   void streaming_will_stop() {
-    // Nothing to do
+    virtual_display_destroy();
+  }
+
+  std::uint32_t virtual_display_create(int width, int height, int fps) {
+    return ::virtual_display_create(width, height, fps);
+  }
+
+  void virtual_display_destroy() {
+    ::virtual_display_destroy();
+  }
+
+  std::uint32_t virtual_display_get_id() {
+    return ::virtual_display_get_id();
   }
 
   static pid_t g_restart_child_pid = 0;  ///< PID of the restarted child process for signal forwarding.

@@ -9,15 +9,6 @@
 
 struct AVFrame;
 
-#ifdef __OBJC__
-@class AVVideo;
-#else
-/**
- * @brief Opaque AVFoundation capture controller, defined in Objective-C.
- */
-struct AVVideo;
-#endif
-
 namespace platf {
   /**
    * @brief Release an FFmpeg frame allocated by the capture or conversion backend.
@@ -30,7 +21,7 @@ namespace platf {
    * @brief macOS zero-copy encode device that forwards NV12 frames from AVFoundation to FFmpeg.
    */
   class nv12_zero_device: public avcodec_encode_device_t {
-    AVVideo *display = nullptr;  ///< Borrowed AVFoundation controller, forward-declared to avoid FFmpeg name conflicts.
+    void *display = nullptr;  ///< Borrowed AVVideo or SCCapture controller, opaque to avoid FFmpeg name conflicts.
 
   public:
     // this function is used to set the resolution on an av_video object that we cannot
@@ -38,12 +29,12 @@ namespace platf {
     /**
      * @brief Callback signature used to update the opaque AVFoundation display resolution.
      */
-    using resolution_fn_t = std::function<void(AVVideo *display, int width, int height)>;
+    using resolution_fn_t = std::function<void(void *display, int width, int height)>;
     resolution_fn_t resolution_fn;  ///< Callback stored for later AVFoundation resolution updates.
     /**
      * @brief Callback signature used to update the opaque AVFoundation pixel format.
      */
-    using pixel_format_fn_t = std::function<void(AVVideo *display, int pixelFormat)>;
+    using pixel_format_fn_t = std::function<void(void *display, int pixelFormat)>;
 
     /**
      * @brief Initialize zero-copy NV12 encoding for an AVFoundation display.
@@ -54,7 +45,7 @@ namespace platf {
      * @param pixel_format_fn Pixel format.
      * @return 0 on success; nonzero or negative platform status on failure.
      */
-    int init(AVVideo *capture_display, pix_fmt_e pix_fmt, resolution_fn_t set_resolution, const pixel_format_fn_t &pixel_format_fn);
+    int init(void *capture_display, pix_fmt_e pix_fmt, resolution_fn_t set_resolution, const pixel_format_fn_t &pixel_format_fn);
 
     /**
      * @brief Forward a captured AVFoundation frame to FFmpeg without copying.

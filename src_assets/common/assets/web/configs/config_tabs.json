@@ -59,6 +59,7 @@
         "resolution_only": [],
         "refresh_rate_only": []
       },
+      "virtual_display": "enabled",
       "max_bitrate": 0,
       "minimum_fps_target": 0
     }

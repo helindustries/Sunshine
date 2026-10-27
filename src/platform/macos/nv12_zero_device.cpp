@@ -38,6 +38,10 @@ namespace platf {
   int nv12_zero_device::convert(platf::img_t &img) {
     auto *av_img = (av_img_t *) &img;
 
+    if (!av_img->pixel_buffer || !av_img->pixel_buffer->buf) {
+      return -1;  // No valid pixel buffer — caller should skip this frame
+    }
+
     // Release any existing CVPixelBuffer previously retained for encoding
     av_buffer_unref(&av_frame->buf[0]);
 
@@ -64,7 +68,7 @@ namespace platf {
     return 0;
   }
 
-  int nv12_zero_device::init(AVVideo *capture_display, pix_fmt_e pix_fmt, resolution_fn_t set_resolution, const pixel_format_fn_t &pixel_format_fn) {
+  int nv12_zero_device::init(void *capture_display, pix_fmt_e pix_fmt, resolution_fn_t set_resolution, const pixel_format_fn_t &pixel_format_fn) {
     pixel_format_fn(capture_display, pix_fmt == pix_fmt_e::nv12 ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange);
 
     this->display = capture_display;

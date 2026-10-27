@@ -18,27 +18,39 @@
 
   self.displayID = displayID;
   self.pixelFormat = kCVPixelFormatType_32BGRA;
-  self.frameWidth = (int) CGDisplayModeGetPixelWidth(mode);
-  self.frameHeight = (int) CGDisplayModeGetPixelHeight(mode);
+  if (mode) {
+    self.frameWidth = (int) CGDisplayModeGetPixelWidth(mode);
+    self.frameHeight = (int) CGDisplayModeGetPixelHeight(mode);
+    CFRelease(mode);
+  } else {
+    // Virtual displays may not have a CGDisplayMode — use CGDisplay dimensions
+    self.frameWidth = (int) CGDisplayPixelsWide(displayID);
+    self.frameHeight = (int) CGDisplayPixelsHigh(displayID);
+  }
   self.minFrameDuration = CMTimeMake(1, frameRate);
   self.session = [[AVCaptureSession alloc] init];
   self.videoOutputs = [[NSMapTable alloc] init];
   self.captureCallbacks = [[NSMapTable alloc] init];
   self.captureSignals = [[NSMapTable alloc] init];
 
-  CFRelease(mode);
-
   AVCaptureScreenInput *screenInput = [[AVCaptureScreenInput alloc] initWithDisplayID:self.displayID];
+  if (!screenInput) {
+    NSLog(@"[AVVideo] Failed to create AVCaptureScreenInput for display %u", self.displayID);
+    return nil;
+  }
   [screenInput setMinFrameDuration:self.minFrameDuration];
+  [screenInput setCapturesMouseClicks:NO];
 
   if ([self.session canAddInput:screenInput]) {
     [self.session addInput:screenInput];
   } else {
+    NSLog(@"[AVVideo] Cannot add screen input for display %u to session", self.displayID);
     [screenInput release];
     return nil;
   }
 
   [self.session startRunning];
+  NSLog(@"[AVVideo] Capture session started for display %u (%dx%d)", self.displayID, self.frameWidth, self.frameHeight);
 
   return self;
 }
@@ -67,7 +79,7 @@
       (NSString *) AVVideoScalingModeKey: AVVideoScalingModeResizeAspect,
     }];
 
-    dispatch_queue_attr_t qos = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, DISPATCH_QUEUE_PRIORITY_HIGH);
+    dispatch_queue_attr_t qos = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0);
     dispatch_queue_t recordingQueue = dispatch_queue_create("videoCaptureQueue", qos);
     [videoOutput setSampleBufferDelegate:self queue:recordingQueue];
 
@@ -96,6 +108,10 @@
 - (void)captureOutput:(AVCaptureOutput *)captureOutput
   didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
          fromConnection:(AVCaptureConnection *)connection {
+  static int frameCount = 0;
+  if (++frameCount <= 3 || frameCount % 300 == 0) {
+    NSLog(@"[AVVideo] Frame %d received from display %u", frameCount, self.displayID);
+  }
   FrameCallbackBlock callback = [self.captureCallbacks objectForKey:connection];
 
   if (callback != nil) {
@@ -110,6 +126,18 @@
         [self.session startRunning];
       }
     }
+  }
+}
+
+- (void)stopCapture {
+  @synchronized(self) {
+    [self.session stopRunning];
+    // Signal all pending captures so waiting threads can exit
+    for (AVCaptureConnection *conn in self.captureSignals.keyEnumerator.allObjects) {
+      dispatch_semaphore_signal([self.captureSignals objectForKey:conn]);
+    }
+    [self.captureCallbacks removeAllObjects];
+    [self.captureSignals removeAllObjects];
   }
 }
 

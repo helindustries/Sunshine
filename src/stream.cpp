@@ -1392,7 +1392,7 @@ namespace stream {
         break;
       }
 
-      server->iterate(150ms);
+      server->iterate(5ms);
     }
 
     // Let all remaining connections know the server is shutting down

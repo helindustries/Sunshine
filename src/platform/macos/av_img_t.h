@@ -50,7 +50,9 @@ namespace platf {
         buf(
           CMSampleBufferGetImageBuffer(sb)
         ) {
-      CVPixelBufferLockBaseAddress(buf, kCVPixelBufferLock_ReadOnly);
+      if (buf) {
+        CVPixelBufferLockBaseAddress(buf, kCVPixelBufferLock_ReadOnly);
+      }
     }
 
     /**
@@ -59,7 +61,7 @@ namespace platf {
      * @return Pointer to the first byte of image data in the pixel buffer.
      */
     [[nodiscard]] uint8_t *data() const {
-      return static_cast<uint8_t *>(CVPixelBufferGetBaseAddress(buf));
+      return buf ? static_cast<uint8_t *>(CVPixelBufferGetBaseAddress(buf)) : nullptr;
     }
 
     // Destructor

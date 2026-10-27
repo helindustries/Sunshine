@@ -7,6 +7,9 @@ if (SUNSHINE_BUILD_HOMEBREW)
     # copy assets to build directory, for running without install
     file(COPY "${SUNSHINE_SOURCE_ASSETS_DIR}/macos/assets/"
          DESTINATION "${CMAKE_BINARY_DIR}/assets")
+
+    # the virtual display is created by vd_helper, looked up next to the sunshine binary
+    install(TARGETS vd_helper RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 else()
     # .app build
     set(APPLE_CODESIGN_IDENTITY "" CACHE STRING "Codesign identity, e.g. 'Developer ID Application: Name (TEAMID)'")
@@ -20,6 +23,9 @@ else()
 
     install(TARGETS sunshine
         BUNDLE DESTINATION .
+        COMPONENT Runtime)
+    install(TARGETS vd_helper
+        RUNTIME DESTINATION "${MAC_BUNDLE_CONTENTS}/MacOS"
         COMPONENT Runtime)
 
     if(SUNSHINE_ENABLE_TRAY)

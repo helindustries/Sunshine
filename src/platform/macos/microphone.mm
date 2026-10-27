@@ -1,12 +1,17 @@
 /**
  * @file src/platform/macos/microphone.mm
- * @brief Definitions for microphone capture on macOS.
+ * @brief Definitions for microphone/audio capture on macOS.
+ * @details Supports:
+ *   - System audio capture via the Core Audio process tap (preferred)
+ *   - System audio capture via ScreenCaptureKit (macOS 12.3+, fallback)
+ *   - Physical microphone capture via AVFoundation
  */
 // local includes
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/macos/av_audio.h"
+#include "src/platform/macos/sc_audio.h"
 
 namespace platf {
   using namespace std::literals;
@@ -64,6 +69,50 @@ namespace platf {
   };
 
   /**
+   * @brief System audio capture using ScreenCaptureKit (macOS 12.3+)
+   */
+  struct sc_mic_t: public mic_t {
+    SCAudioCapture *sc_audio_capture API_AVAILABLE(macos(12.3)) {};
+
+    ~sc_mic_t() override {
+      if (@available(macOS 12.3, *)) {
+        [sc_audio_capture release];
+      }
+    }
+
+    capture_e sample(std::vector<float> &sample_in) override {
+      if (@available(macOS 12.3, *)) {
+        const auto neededBytes = static_cast<uint32_t>(sample_in.size() * sizeof(float));
+
+        uint32_t length = 0;
+        TPCircularBuffer *buffer = [sc_audio_capture getAudioBuffer];
+        void *byteSampleBuffer = TPCircularBufferTail(buffer, &length);
+
+        int wait_count = 0;
+        while (length < neededBytes) {
+          if (!sc_audio_capture.isCapturing) {
+            return capture_e::capture_error;
+          }
+          [sc_audio_capture.samplesArrivedSignal lock];
+          [sc_audio_capture.samplesArrivedSignal waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+          [sc_audio_capture.samplesArrivedSignal unlock];
+          byteSampleBuffer = TPCircularBufferTail(buffer, &length);
+          // After 500ms of no data, return timeout so the caller can check shutdown_event
+          if (++wait_count > 5 && length < neededBytes) {
+            return capture_e::timeout;
+          }
+        }
+
+        std::memcpy(sample_in.data(), byteSampleBuffer, neededBytes);
+        TPCircularBufferConsume(buffer, neededBytes);
+
+        return capture_e::ok;
+      }
+      return capture_e::capture_error;
+    }
+  };
+
+  /**
    * @brief macOS audio control state used to create microphone streams.
    */
   struct macos_audio_control_t: public audio_control_t {
@@ -93,54 +142,74 @@ namespace platf {
      * @return Microphone capture object for the requested audio layout.
      */
     std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous_audio, bool host_audio_enabled) override {
-      auto mic = std::make_unique<av_mic_t>();
-      mic->av_audio_capture = [[AVAudio alloc] init];
-
-      // Set the host audio enabled flag from the stream configuration
-      mic->av_audio_capture.hostAudioEnabled = host_audio_enabled ? YES : NO;
-      BOOST_LOG(debug) << "Set hostAudioEnabled to: "sv << (host_audio_enabled ? "YES" : "NO");
-
-      if (config::audio.sink.empty()) {
+      if (is_system_sink(config::audio.sink)) {
         // Use macOS system-wide audio tap
         BOOST_LOG(info) << "Using macOS system audio tap for capture."sv;
         BOOST_LOG(info) << "Sample rate: "sv << sample_rate << ", Frame size: "sv << frame_size << ", Channels: "sv << channels;
 
-        if ([mic->av_audio_capture setupSystemTap:sample_rate frameSize:frame_size channels:channels]) {
-          BOOST_LOG(error) << "Failed to setup system audio tap."sv;
-          return nullptr;
-        }
-      } else {
-        // Use specified macOS audio sink
-        const char *audio_sink = config::audio.sink.c_str();
-        BOOST_LOG(info) << "Using configured audio sink "sv << audio_sink << " for capture."sv;
+        auto mic = std::make_unique<av_mic_t>();
+        mic->av_audio_capture = [[AVAudio alloc] init];
+        mic->av_audio_capture.hostAudioEnabled = host_audio_enabled ? YES : NO;
 
-        if (!request_microphone_permission()) {
-          return nullptr;
+        if ([mic->av_audio_capture setupSystemTap:sample_rate frameSize:frame_size channels:channels] == 0) {
+          return mic;
         }
 
-        if ((audio_capture_device = [AVAudio findMicrophone:[NSString stringWithUTF8String:audio_sink]]) == nullptr) {
-          BOOST_LOG(error) << "opening microphone '"sv << audio_sink << "' failed. Please set a valid input source in the Sunshine config."sv;
-          BOOST_LOG(error) << "Available inputs:"sv;
+        BOOST_LOG(warning) << "Failed to setup system audio tap, trying ScreenCaptureKit."sv;
+        if (@available(macOS 12.3, *)) {
+          if ([SCAudioCapture isAvailable]) {
+            auto sc_mic = std::make_unique<sc_mic_t>();
+            sc_mic->sc_audio_capture = [[SCAudioCapture alloc] init];
 
-          for (NSString *name in [AVAudio microphoneNames]) {
-            BOOST_LOG(error) << "\t"sv << [name UTF8String];
+            if ([sc_mic->sc_audio_capture startCaptureWithSampleRate:sample_rate channels:channels] == 0) {
+              BOOST_LOG(info) << "System audio capture enabled via ScreenCaptureKit."sv;
+              return sc_mic;
+            }
           }
-
-          return nullptr;
         }
 
-        if ([mic->av_audio_capture setupMicrophone:audio_capture_device sampleRate:sample_rate frameSize:frame_size channels:channels]) {
-          BOOST_LOG(error) << "Failed to setup microphone."sv;
-          return nullptr;
+        BOOST_LOG(error) << "No system audio capture available; Screen Recording permission may be missing."sv;
+        return nullptr;
+      }
+
+      // Use specified macOS audio sink
+      const char *audio_sink = config::audio.sink.c_str();
+      BOOST_LOG(info) << "Using configured audio sink "sv << audio_sink << " for capture."sv;
+
+      if (!request_microphone_permission()) {
+        return nullptr;
+      }
+
+      if ((audio_capture_device = [AVAudio findMicrophone:[NSString stringWithUTF8String:audio_sink]]) == nullptr) {
+        BOOST_LOG(error) << "opening microphone '"sv << audio_sink << "' failed. Please set a valid input source in the Sunshine config."sv;
+        BOOST_LOG(error) << "Available inputs:"sv;
+
+        for (NSString *name in [AVAudio microphoneNames]) {
+          BOOST_LOG(error) << "\t"sv << [name UTF8String];
         }
+
+        return nullptr;
+      }
+
+      auto mic = std::make_unique<av_mic_t>();
+      mic->av_audio_capture = [[AVAudio alloc] init];
+      mic->av_audio_capture.hostAudioEnabled = host_audio_enabled ? YES : NO;
+
+      if ([mic->av_audio_capture setupMicrophone:audio_capture_device sampleRate:sample_rate frameSize:frame_size channels:channels]) {
+        BOOST_LOG(error) << "Failed to setup microphone."sv;
+        return nullptr;
       }
 
       return mic;
     }
 
     bool is_sink_available(const std::string &sink) override {
-      BOOST_LOG(warning) << "audio_control_t::is_sink_available() unimplemented: "sv << sink;
-      return true;
+      if (is_system_sink(sink)) {
+        return true;
+      }
+
+      // Check for physical input devices
+      return [AVAudio findMicrophone:[NSString stringWithUTF8String:sink.c_str()]] != nil;
     }
 
     /**
@@ -152,6 +221,13 @@ namespace platf {
       sink_t sink;
 
       return sink;
+    }
+
+  private:
+    static bool is_system_sink(const std::string &sink) {
+      return sink.empty() || strcasecmp(sink.c_str(), "system") == 0 ||
+             strcasecmp(sink.c_str(), "desktop") == 0 ||
+             strcasecmp(sink.c_str(), "screencapturekit") == 0;
     }
   };
 

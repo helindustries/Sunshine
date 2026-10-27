@@ -456,6 +456,8 @@
     "vaapi_rc_vbr": "vbr -- variable bitrate",
     "vaapi_strict_rc_buffer": "Strictly enforce frame bitrate limits for H.264/HEVC on AMD GPUs",
     "vaapi_strict_rc_buffer_desc": "Enabling this option can avoid dropped frames over the network during scene changes, but video quality may be reduced during motion.",
+    "virtual_display": "Virtual Display",
+    "virtual_display_desc": "Create a virtual display at the resolution and refresh rate the client asks for, and stream that display instead of a physical one. Applies to macOS.",
     "vk_rc_cbr": "CBR (Constant Bitrate) (default)",
     "vk_rc_cqp": "CQP (Constant QP)",
     "vk_rc_mode": "Rate Control",
