@@ -23,6 +23,9 @@ elseif(UNIX)
     endif()
 endif()
 
+# As -I, ahead of every -isystem: with Homebrew, /opt/homebrew/include arrives as a system include
+# before the bundled ffmpeg, and a Homebrew ffmpeg's older headers there set the include guards first
+target_include_directories(sunshine BEFORE PRIVATE ${FFMPEG_INCLUDE_DIRS})
 target_link_libraries(sunshine ${SUNSHINE_EXTERNAL_LIBRARIES} ${EXTRA_LIBS})
 target_compile_definitions(sunshine PUBLIC ${SUNSHINE_DEFINITIONS})
 
