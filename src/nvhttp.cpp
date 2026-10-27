@@ -1421,7 +1421,9 @@ namespace nvhttp {
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, args);
 
-    if (rtsp_stream::session_count() == 0) {
+    // A launch still in its RTSP handshake counts as a session: probing the encoders now would
+    // replace chosen_encoder under it as it starts capturing
+    if (rtsp_stream::session_count() == 0 && !rtsp_stream::launch_pending()) {
       // The display should be restored in case something fails as there are no other sessions.
       revert_display_configuration = true;
 
@@ -1535,7 +1537,7 @@ namespace nvhttp {
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
-    const bool no_active_sessions {rtsp_stream::session_count() == 0};
+    const bool no_active_sessions {rtsp_stream::session_count() == 0 && !rtsp_stream::launch_pending()};
     if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }

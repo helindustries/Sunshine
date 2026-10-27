@@ -122,6 +122,12 @@ namespace rtsp_stream {
   int session_count();
 
   /**
+   * @brief Whether a launch is waiting for its client's RTSP handshake.
+   * @return True while a launched session has not started streaming yet.
+   */
+  bool launch_pending();
+
+  /**
    * @brief Terminates all running streaming sessions.
    */
   void terminate_sessions();

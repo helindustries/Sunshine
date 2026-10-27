@@ -719,6 +719,10 @@ namespace rtsp_stream {
     server.session_clear(launch_session_id);
   }
 
+  bool launch_pending() {
+    return static_cast<bool>(server.launch_event.view(0s));
+  }
+
   int session_count() {
     // Ensure session_count is up-to-date
     server.clear(false);
