@@ -183,6 +183,8 @@ list(REMOVE_ITEM SUNSHINE_SOURCES ${CMAKE_SOURCE_DIR}/src/main.cpp)
 add_executable(${PROJECT_NAME}
         ${TEST_SOURCES}
         ${SUNSHINE_SOURCES})
+# Same as the sunshine target: the bundled ffmpeg headers must win over Homebrew's
+target_include_directories(${PROJECT_NAME} BEFORE PRIVATE ${FFMPEG_INCLUDE_DIRS})
 
 # Copy integration-test fixtures to the build directory.
 # Preserve repository-relative paths for source and installed-test layouts.

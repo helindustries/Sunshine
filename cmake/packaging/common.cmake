@@ -37,8 +37,13 @@ foreach(asset ${ALL_ASSETS})  # Copy assets to build directory, excluding the we
             DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/assets")
 endforeach()
 
-# install built vite assets
-install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets/web"
+# install built vite assets; a Homebrew build lets vite use its default output, Source/build
+if(SUNSHINE_BUILD_HOMEBREW)
+    set(_sunshine_web_assets_dir "${CMAKE_SOURCE_DIR}/build/assets/web")
+else()
+    set(_sunshine_web_assets_dir "${CMAKE_CURRENT_BINARY_DIR}/assets/web")
+endif()
+install(DIRECTORY "${_sunshine_web_assets_dir}"
         DESTINATION "${SUNSHINE_ASSETS_DIR}"
         ${_sunshine_common_asset_component})
 
