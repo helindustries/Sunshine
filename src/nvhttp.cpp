@@ -1359,6 +1359,11 @@ namespace nvhttp {
   }
 
   /**
+   * @brief Serializes launch and resume, so clients starting together see each other's app and display.
+   */
+  std::mutex launch_mutex;
+
+  /**
    * @brief Launch the requested application for a GameStream session.
    *
    * @param host_audio Host audio.
@@ -1367,6 +1372,7 @@ namespace nvhttp {
    */
   void launch(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
+    std::lock_guard launch_lock {launch_mutex};
 
     pt::ptree tree;
     bool revert_display_configuration {false};
@@ -1402,8 +1408,9 @@ namespace nvhttp {
 
     auto appid = util::from_view(get_arg(args, "appid"));
 
+    // Clients launching together race the first launch's app start; the same app is attached to like a resume
     auto current_appid = proc::proc.running();
-    if (current_appid > 0) {
+    if (current_appid > 0 && current_appid != appid) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 400);
       tree.put("root.<xmlattr>.status_message", "An app is already running on this host");
@@ -1434,11 +1441,6 @@ namespace nvhttp {
 
         return;
       }
-
-      // Create virtual display after encoder probing succeeds (macOS).
-      // Must happen after probe_encoders() because the virtual display
-      // can't be captured during the encoder test phase.
-      display_device::create_virtual_display(config::video, *launch_session);
     }
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
@@ -1452,9 +1454,13 @@ namespace nvhttp {
       return;
     }
 
-    if (appid > 0) {
+    // Every session gets its own virtual display, after probe_encoders(): the encoder test cannot capture it
+    launch_session->output_name = display_device::acquire_virtual_display(config::video, *launch_session);
+
+    if (appid > 0 && proc::proc.running() != appid) {
       auto err = proc::proc.execute((int) appid, launch_session);
       if (err) {
+        display_device::release_virtual_display(launch_session->output_name);
         tree.put("root.<xmlattr>.status_code", err);
         tree.put("root.<xmlattr>.status_message", "Failed to start the specified application");
         tree.put("root.gamesession", 0);
@@ -1490,6 +1496,7 @@ namespace nvhttp {
    */
   void resume(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
+    std::lock_guard launch_lock {launch_mutex};
 
     pt::ptree tree;
     auto g = util::fail_guard([&]() {
@@ -1551,9 +1558,6 @@ namespace nvhttp {
 
         return;
       }
-
-      // Create virtual display after encoder probing succeeds (macOS)
-      display_device::create_virtual_display(config::video, *launch_session);
     }
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
@@ -1566,6 +1570,9 @@ namespace nvhttp {
 
       return;
     }
+
+    // A resuming client gets its earlier display back when that session has ended, else a new one
+    launch_session->output_name = display_device::acquire_virtual_display(config::video, *launch_session);
 
     tree.put("root.<xmlattr>.status_code", 200);
     tree.put(
@@ -1607,6 +1614,11 @@ namespace nvhttp {
 
     if (proc::proc.running() > 0) {
       proc::proc.terminate();
+    }
+
+    // Sessions still stopping destroy the virtual displays themselves once the last one ends
+    if (rtsp_stream::session_count() == 0) {
+      display_device::destroy_virtual_displays();
     }
 
     // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.

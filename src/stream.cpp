@@ -2249,10 +2249,15 @@ namespace stream {
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
 
+      if (!session.config.monitor.output_name.empty()) {
+        display_device::release_virtual_display(session.config.monitor.output_name);
+      }
+
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
         if (proc::proc.running()) {
+          // Virtual displays stay while the app runs, so a reconnecting client finds its windows
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
           system_tray::update_tray_pausing(proc::proc.get_last_run_app_name());
 #endif
@@ -2260,6 +2265,7 @@ namespace stream {
           // We have no app running and also no clients anymore.
           revert_display_config = true;
           input::terminate_gamepads();
+          display_device::destroy_virtual_displays();
         }
 
         if (revert_display_config) {
@@ -2331,6 +2337,7 @@ namespace stream {
       session->input_session_id = launch_session.client_cert.empty() ? launch_session.unique_id : launch_session.client_cert;
 
       session->config = config;
+      session->config.monitor.output_name = launch_session.output_name;
 
       session->control.connect_data = launch_session.control_connect_data;
       session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback);

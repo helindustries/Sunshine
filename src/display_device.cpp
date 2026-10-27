@@ -968,19 +968,83 @@ namespace display_device {
     // want to revert active configuration in case we have any
   }
 
-  void create_virtual_display([[maybe_unused]] const config::video_t &video_config, [[maybe_unused]] const rtsp_stream::launch_session_t &session) {
-#ifdef __APPLE__
+  namespace {
+    /**
+     * @brief A virtual display created for a client's session.
+     */
+    struct virtual_screen_t {
+      std::string client_id;  ///< Paired client certificate, or the unique id of an unpaired client.
+      std::string output_name;  ///< Output name the session captures.
+      int width;  ///< Width in pixels.
+      int height;  ///< Height in pixels.
+      int fps;  ///< Refresh rate in Hz.
+      bool in_use;  ///< Whether a session is streaming it.
+    };
+
+    std::mutex virtual_screens_mutex;
+    std::vector<virtual_screen_t> virtual_screens;
+
+    std::string client_id_for(const rtsp_stream::launch_session_t &session) {
+      return session.client_cert.empty() ? session.unique_id : session.client_cert;
+    }
+  }  // namespace
+
+  std::string acquire_virtual_display(const config::video_t &video_config, const rtsp_stream::launch_session_t &session) {
+    std::string output_name;
     if (video_config.virtual_display == "enabled" && session.width > 0 && session.height > 0 && session.fps > 0) {
-      auto vd_id = platf::virtual_display_create(session.width, session.height, session.fps);
-      if (vd_id != 0) {
-        BOOST_LOG(info) << "Created virtual display " << vd_id << " (" << session.width << "x" << session.height << "@" << session.fps << "Hz)";
-        // Give the window server time to register the display before capture
-        std::this_thread::sleep_for(5s);
+      const auto client_id {client_id_for(session)};
+      std::unique_lock lock {virtual_screens_mutex};
+
+      // Of the client's free displays, prefer one that already has the requested mode
+      auto free_screen = std::ranges::find_if(virtual_screens, [&](const auto &screen) {
+        return !screen.in_use && screen.client_id == client_id && screen.width == session.width && screen.height == session.height && screen.fps == session.fps;
+      });
+      if (free_screen == virtual_screens.end()) {
+        free_screen = std::ranges::find_if(virtual_screens, [&](const auto &screen) {
+          return !screen.in_use && screen.client_id == client_id;
+        });
+      }
+
+      if (free_screen != virtual_screens.end() && free_screen->width == session.width && free_screen->height == session.height && free_screen->fps == session.fps) {
+        free_screen->in_use = true;
+        output_name = free_screen->output_name;
+        BOOST_LOG(info) << "Reusing virtual display "sv << output_name << " ("sv << session.width << 'x' << session.height << '@' << session.fps << "Hz)"sv;
       } else {
-        BOOST_LOG(warning) << "Failed to create virtual display, falling back to existing display";
+        if (free_screen != virtual_screens.end()) {
+          BOOST_LOG(info) << "Recreating virtual display "sv << free_screen->output_name << " at "sv << session.width << 'x' << session.height << '@' << session.fps << "Hz"sv;
+          platf::virtual_display_destroy(free_screen->output_name);
+          virtual_screens.erase(free_screen);
+        }
+
+        output_name = platf::virtual_display_create(session.width, session.height, session.fps);
+        if (!output_name.empty()) {
+          virtual_screens.push_back({client_id, output_name, session.width, session.height, session.fps, true});
+          BOOST_LOG(info) << "Created virtual display "sv << output_name << " ("sv << session.width << 'x' << session.height << '@' << session.fps << "Hz, "sv << virtual_screens.size() << " in total)"sv;
+          lock.unlock();
+          // Give the window server time to register the display before capture
+          std::this_thread::sleep_for(5s);
+        } else {
+          BOOST_LOG(warning) << "Failed to create a virtual display, the session captures the configured display"sv;
+        }
       }
     }
-#endif
+    return output_name;
+  }
+
+  void release_virtual_display(const std::string &output_name) {
+    std::lock_guard lock {virtual_screens_mutex};
+    if (auto screen = std::ranges::find(virtual_screens, output_name, &virtual_screen_t::output_name); screen != virtual_screens.end()) {
+      screen->in_use = false;
+    }
+  }
+
+  void destroy_virtual_displays() {
+    std::lock_guard lock {virtual_screens_mutex};
+    for (const auto &screen : virtual_screens) {
+      BOOST_LOG(info) << "Destroying virtual display "sv << screen.output_name;
+      platf::virtual_display_destroy(screen.output_name);
+    }
+    virtual_screens.clear();
   }
 
   void configure_display(const SingleDisplayConfiguration &config) {

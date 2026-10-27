@@ -13,7 +13,9 @@ extern "C" {
 #include <array>
 #include <cctype>
 #include <format>
+#include <mutex>
 #include <set>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -23,6 +25,7 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "display_device.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -558,6 +561,7 @@ namespace rtsp_stream {
           auto discarded = launch_event.pop(0s);
           if (discarded) {
             BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
+            display_device::release_virtual_display(discarded->output_name);
           }
         }
       });
@@ -693,7 +697,22 @@ namespace rtsp_stream {
    * @brief Queue a launch session until the RTSP client connects.
    */
   void launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
-    server.session_raise(std::move(launch_session));
+    // RTSP connections carry no launch id and are bound to the one pending launch on arrival, so
+    // a second client's launch waits here until the first has started streaming or timed out
+    static std::mutex launch_mutex;
+    std::lock_guard lock {launch_mutex};
+
+    const auto deadline = std::chrono::steady_clock::now() + config::stream.ping_timeout;
+    while (server.launch_event.view(0s) && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(50ms);
+    }
+
+    if (server.launch_event.view(0s)) {
+      BOOST_LOG(warning) << "Dropping launch for "sv << launch_session->client_name << ": an earlier launch is still pending"sv;
+      display_device::release_virtual_display(launch_session->output_name);
+    } else {
+      server.session_raise(std::move(launch_session));
+    }
   }
 
   void launch_session_clear(uint32_t launch_session_id) {

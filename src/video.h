@@ -6,6 +6,7 @@
 
 // standard includes
 #include <chrono>
+#include <string>
 #include <string_view>
 
 // local includes
@@ -43,6 +44,7 @@ namespace video {
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
+    std::string output_name;  ///< Display this session captures; empty selects the configured output_name.
   };
 
   namespace amf {

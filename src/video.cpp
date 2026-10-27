@@ -8,6 +8,8 @@
 #include <atomic>
 #include <bitset>
 #include <list>
+#include <map>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -663,6 +665,7 @@ namespace video {
    * @brief Asynchronous capture thread state.
    */
   struct capture_thread_async_ctx_t {
+    std::string output_name;  ///< Display this capture thread captures; empty selects the configured output_name.
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue;  ///< Capture ctx queue.
     std::jthread capture_thread;  ///< Capture thread.
 
@@ -705,8 +708,36 @@ namespace video {
    */
   void end_capture_async(capture_thread_async_ctx_t &ctx);
 
-  // Keep a reference counter to ensure the capture thread only runs when other threads have a reference to the capture thread
-  auto capture_thread_async = safe::make_shared<capture_thread_async_ctx_t>(start_capture_async, end_capture_async);  ///< Capture thread async.
+  /**
+   * @brief Asynchronous capture threads, one per captured display, keyed by output name.
+   * @details Each entry is reference counted, so a display's capture thread only runs while
+   *          sessions capturing that display hold a reference. Entries are never erased: a
+   *          reference holds a pointer into its entry.
+   */
+  std::map<std::string, std::unique_ptr<safe::shared_t<capture_thread_async_ctx_t>>> capture_threads_async;
+  std::mutex capture_threads_async_mutex;  ///< Guards capture_threads_async.
+
+  /**
+   * @brief Reference the capture thread for a display, starting it for the first session.
+   *
+   * @param output_name Display to capture; empty selects the configured output_name.
+   * @return Reference to the capture thread, empty if it failed to start.
+   */
+  safe::shared_t<capture_thread_async_ctx_t>::ptr_t ref_capture_thread_async(const std::string &output_name) {
+    std::lock_guard lock {capture_threads_async_mutex};
+    auto &capture_thread = capture_threads_async[output_name];
+    if (!capture_thread) {
+      capture_thread = std::make_unique<safe::shared_t<capture_thread_async_ctx_t>>(
+        [output_name](capture_thread_async_ctx_t &ctx) {
+          ctx.output_name = output_name;
+          return start_capture_async(ctx);
+        },
+        end_capture_async
+      );
+    }
+    return capture_thread->ref();
+  }
+
   auto capture_thread_sync = safe::make_shared<capture_thread_sync_ctx_t>(start_capture_sync, end_capture_sync);  ///< Capture thread sync.
 
 #ifdef _WIN32
@@ -1501,10 +1532,12 @@ namespace video {
    * @param dev_type The encoder device type used for display lookup.
    * @param display_names The list of display names to repopulate.
    * @param current_display_index The current display index or -1 if not yet known.
+   * @param requested_output_name Platform display name a session asked for, such as its own virtual
+   *                              display; empty selects the configured output_name.
    */
-  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
+  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index, const std::string &requested_output_name = {}) {
     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
-    const auto output_name {display_device::map_output_name(config::video.output_name)};
+    const auto output_name {requested_output_name.empty() ? display_device::map_output_name(config::video.output_name) : requested_output_name};
     std::string current_display_name;
 
     // If we have a current display index, let's start with that
@@ -1523,6 +1556,11 @@ namespace video {
       return;
     } else if (display_names.empty()) {
       display_names.emplace_back(output_name);
+    }
+
+    // A display created for a session moments ago may not be enumerated yet
+    if (!requested_output_name.empty() && std::ranges::find(display_names, requested_output_name) == display_names.end()) {
+      display_names.emplace_back(requested_output_name);
     }
 
     // We now have a new display name list, so reset the index back to 0
@@ -1557,12 +1595,14 @@ namespace video {
    * @param display_wp Weak pointer holder for the active display.
    * @param reinit_event Signal raised while the display is being reinitialized.
    * @param encoder Selected encoder.
+   * @param output_name Display this thread captures; empty selects the configured output_name.
    */
   void captureThread(
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
     sync_util::sync_t<std::weak_ptr<platf::display_t>> &display_wp,
     safe::signal_t &reinit_event,
-    const encoder_t &encoder
+    const encoder_t &encoder,
+    const std::string &output_name
   ) {
     std::vector<capture_ctx_t> capture_ctxs;
 
@@ -1591,7 +1631,7 @@ namespace video {
     // get the most up-to-date list available monitors
     std::vector<std::string> display_names;
     int display_p = -1;
-    refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+    refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, output_name);
     auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
     if (!disp) {
       return;
@@ -1780,7 +1820,7 @@ namespace video {
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
-              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, output_name);
 
               // Process any pending display switch with the new list of displays
               if (switch_display_event->peek()) {
@@ -2882,7 +2922,7 @@ namespace video {
       shutdown_event->raise(true);
     });
 
-    auto ref = capture_thread_async.ref();
+    auto ref = ref_capture_thread_async(config.output_name);
     if (!ref) {
       return;
     }
@@ -3673,7 +3713,8 @@ namespace video {
       capture_thread_ctx.capture_ctx_queue,
       std::ref(capture_thread_ctx.display_wp),
       std::ref(capture_thread_ctx.reinit_event),
-      std::ref(*capture_thread_ctx.encoder_p)
+      std::ref(*capture_thread_ctx.encoder_p),
+      std::cref(capture_thread_ctx.output_name)
     };
 
     return 0;

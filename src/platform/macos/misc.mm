@@ -14,6 +14,7 @@
 
 // standard includes
 #include <algorithm>
+#include <charconv>
 #include <future>
 #include <memory>
 
@@ -520,19 +521,21 @@ namespace platf {
   }
 
   void streaming_will_stop() {
-    virtual_display_destroy();
+    // Nothing to do
   }
 
-  std::uint32_t virtual_display_create(int width, int height, int fps) {
-    return ::virtual_display_create(width, height, fps);
+  std::string virtual_display_create(int width, int height, int fps) {
+    const auto display_id = ::virtual_display_create(width, height, fps);
+    return display_id == 0 ? std::string {} : std::to_string(display_id);
   }
 
-  void virtual_display_destroy() {
-    ::virtual_display_destroy();
-  }
-
-  std::uint32_t virtual_display_get_id() {
-    return ::virtual_display_get_id();
+  void virtual_display_destroy(const std::string &output_name) {
+    std::uint32_t display_id {};
+    if (const auto [end, ec] = std::from_chars(output_name.data(), output_name.data() + output_name.size(), display_id); ec == std::errc {} && display_id != 0) {
+      ::virtual_display_destroy(display_id);
+    } else {
+      BOOST_LOG(warning) << "Not a virtual display id: ["sv << output_name << ']';
+    }
   }
 
   static pid_t g_restart_child_pid = 0;  ///< PID of the restarted child process for signal forwarding.

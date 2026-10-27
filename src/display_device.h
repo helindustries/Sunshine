@@ -119,12 +119,27 @@ namespace display_device {
   void revert_configuration();
 
   /**
-   * @brief Create a virtual display matching the client's requested resolution (macOS only).
+   * @brief Give a launching session its own virtual display at the size the client asked for.
+   * @details A client whose earlier session has ended gets that session's display back, recreated
+   *          if the size or refresh rate changed. A client whose sessions are all still running
+   *          gets an additional display.
    * @param video_config User's video related configuration.
-   * @param session Session information containing width, height, and fps.
+   * @param session Session information containing the client identity, width, height, and fps.
+   * @return Output name the session captures, empty when virtual displays are disabled or failed.
    * @note Must be called AFTER probe_encoders() to avoid capturing an unready display.
    */
-  void create_virtual_display(const config::video_t &video_config, const rtsp_stream::launch_session_t &session);
+  std::string acquire_virtual_display(const config::video_t &video_config, const rtsp_stream::launch_session_t &session);
+
+  /**
+   * @brief Mark a session's virtual display as free for its client to reconnect to.
+   * @param output_name Output name returned by acquire_virtual_display().
+   */
+  void release_virtual_display(const std::string &output_name);
+
+  /**
+   * @brief Destroy every virtual display, used once the last session has stopped.
+   */
+  void destroy_virtual_displays();
 
   /**
    * @brief Reset persisted display state and the captured initial state.

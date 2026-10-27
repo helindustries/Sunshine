@@ -1285,6 +1285,14 @@ namespace platf {
     }
   }
 
+  std::string virtual_display_create(int /*width*/, int /*height*/, int /*fps*/) {
+    return {};
+  }
+
+  void virtual_display_destroy(const std::string & /*output_name*/) {
+    // No virtual displays are created on Windows yet
+  }
+
   void streaming_will_stop() {
     // Demote ourselves back to normal priority class
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);

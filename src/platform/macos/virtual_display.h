@@ -11,7 +11,7 @@ extern "C" {
 #include <stdint.h>
 
 /**
- * @brief Create a virtual display with the specified resolution and refresh rate.
+ * @brief Create an additional virtual display with the specified resolution and refresh rate.
  * @param width Display width in pixels.
  * @param height Display height in pixels.
  * @param fps Refresh rate in Hz.
@@ -20,15 +20,10 @@ extern "C" {
 uint32_t virtual_display_create(int width, int height, int fps);
 
 /**
- * @brief Destroy the currently active virtual display.
+ * @brief Destroy one virtual display created by virtual_display_create().
+ * @param display_id The CGDirectDisplayID returned on creation.
  */
-void virtual_display_destroy(void);
-
-/**
- * @brief Get the display ID of the currently active virtual display.
- * @return The CGDirectDisplayID, or 0 if no virtual display is active.
- */
-uint32_t virtual_display_get_id(void);
+void virtual_display_destroy(uint32_t display_id);
 
 #ifdef __cplusplus
 }

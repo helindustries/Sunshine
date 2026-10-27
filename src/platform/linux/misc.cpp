@@ -612,6 +612,14 @@ namespace platf {
     // Nothing to do
   }
 
+  std::string virtual_display_create(int /*width*/, int /*height*/, int /*fps*/) {
+    return {};
+  }
+
+  void virtual_display_destroy(const std::string & /*output_name*/) {
+    // No virtual displays are created on Linux
+  }
+
   /**
    * @brief Request a Sunshine process restart on exit.
    */
