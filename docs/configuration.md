@@ -1502,7 +1502,8 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
         <td>Description</td>
         <td colspan="2">
             Create a virtual display at the resolution and refresh rate the client asks for, and stream
-            that display instead of a physical one. Applies to macOS.
+            that display instead of a physical one. Every session gets its own display. Applies to
+            macOS and to Windows with the SudoVDA driver installed.
         </td>
     </tr>
     <tr>
