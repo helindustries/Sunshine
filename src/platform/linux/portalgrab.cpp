@@ -6,17 +6,21 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <string>
+#include <string_view>
 
 // lib includes
 #include <lizardbyte/common/env.h>
 
 // local includes
+#include "misc.h"
 #include "pipewire.cpp"
 #include "src/globals.h"
 
 namespace {
   // Portal configuration constants
   constexpr uint32_t SOURCE_TYPE_MONITOR = 1;
+  constexpr uint32_t SOURCE_TYPE_VIRTUAL = 4;
   constexpr uint32_t CURSOR_MODE_EMBEDDED = 2;
 
   constexpr uint32_t PERSIST_FORGET = 0;
@@ -45,9 +49,24 @@ namespace portal {
   class runtime_t;
 
   /**
+   * @brief File name of the restore token for monitor screencasts.
+   */
+  struct monitor_token_tag {
+    static constexpr std::string_view stem = "portal_token";  ///< Token file name before the desktop suffix.
+  };
+
+  /**
+   * @brief File name of the restore token for virtual monitor screencasts; a separate grant.
+   */
+  struct virtual_token_tag {
+    static constexpr std::string_view stem = "portal_virtual_token";  ///< Token file name before the desktop suffix.
+  };
+
+  /**
    * @brief Persistent portal restore token used to reuse screencast permission.
    */
-  class restore_token_t {
+  template<typename Tag>
+  class restore_token_store_t {
   public:
     /**
      * @brief Return the currently wrapped value or handle.
@@ -137,7 +156,7 @@ namespace portal {
       const std::filesystem::path &directory = platf::appdata(),
       const std::string &desktop = lizardbyte::common::get_env("XDG_SESSION_DESKTOP")
     ) {
-      const std::filesystem::path legacy_path = directory / "portal_token";
+      const std::filesystem::path legacy_path = directory / Tag::stem;
 
       std::string suffix(desktop);
       boost::algorithm::to_lower(suffix);
@@ -151,7 +170,7 @@ namespace portal {
         suffix = "unknown";
       }
 
-      const std::filesystem::path suffixed_path = directory / ("portal_token." + suffix);
+      const std::filesystem::path suffixed_path = directory / (std::string {Tag::stem} + "." + suffix);
 
       // One-time migration of legacy portal_token.
       std::error_code ec;
@@ -176,6 +195,9 @@ namespace portal {
   private:
     static inline const std::unique_ptr<std::string> token_ = std::make_unique<std::string>();
   };
+
+  using restore_token_t = restore_token_store_t<monitor_token_tag>;  ///< Token for monitor screencasts.
+  using virtual_restore_token_t = restore_token_store_t<virtual_token_tag>;  ///< Token for virtual monitor screencasts.
 
   /**
    * @brief Clear a restore token if it already exists on disk.
@@ -257,6 +279,10 @@ namespace portal {
   std::filesystem::path get_saved_token_path_for_testing(const std::filesystem::path &directory, const std::string &desktop) {
     return restore_token_t::get_file_path(directory, desktop);
   }
+
+  std::filesystem::path get_saved_virtual_token_path_for_testing(const std::filesystem::path &directory, const std::string &desktop) {
+    return virtual_restore_token_t::get_file_path(directory, desktop);
+  }
 #endif
 
   /**
@@ -301,6 +327,34 @@ namespace portal {
   class dbus_t {
   public:
     guint dbus_timeout = 10;  ///< Timeout in seconds for DBus calls.
+    bool virtual_source = false;  ///< Ask for a new virtual monitor instead of an existing one.
+
+    /**
+     * @brief Whether a restore token for this kind of session exists.
+     */
+    bool token_empty() const {
+      return virtual_source ? virtual_restore_token_t::empty() : restore_token_t::empty();
+    }
+
+    /**
+     * @brief The restore token for this kind of session.
+     */
+    std::string token() const {
+      return virtual_source ? virtual_restore_token_t::get() : restore_token_t::get();
+    }
+
+    /**
+     * @brief Keep a new restore token for this kind of session, and persist it.
+     */
+    void store_token(std::string_view value) const {
+      if (virtual_source) {
+        virtual_restore_token_t::set(value);
+        virtual_restore_token_t::save();
+      } else {
+        restore_token_t::set(value);
+        restore_token_t::save();
+      }
+    }
 
     dbus_t &operator=(dbus_t &&) = delete;  // Do not allow to copying
 
@@ -356,6 +410,7 @@ namespace portal {
      */
     int init() {
       restore_token_t::load();
+      virtual_restore_token_t::load();
 
       g_autoptr(GError) g_error = nullptr;
       g_autofree gchar *address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SESSION, nullptr, &g_error);
@@ -608,8 +663,8 @@ namespace portal {
       g_variant_builder_add(&builder, "{sv}", "handle_token", g_variant_new_string(request_token));
       g_variant_builder_add(&builder, "{sv}", "types", g_variant_new_uint32(TYPE_KEYBOARD | TYPE_POINTER | TYPE_TOUCHSCREEN));
       g_variant_builder_add(&builder, "{sv}", "persist_mode", g_variant_new_uint32(PERSIST_UNTIL_REVOKED));
-      if (!restore_token_t::empty()) {
-        g_variant_builder_add(&builder, "{sv}", "restore_token", g_variant_new_string(restore_token_t::get().c_str()));
+      if (!token_empty()) {
+        g_variant_builder_add(&builder, "{sv}", "restore_token", g_variant_new_string(token().c_str()));
       }
       g_variant_builder_close(&builder);
 
@@ -654,13 +709,14 @@ namespace portal {
       g_variant_builder_add(&builder, "o", session_path);
       g_variant_builder_open(&builder, G_VARIANT_TYPE("a{sv}"));
       g_variant_builder_add(&builder, "{sv}", "handle_token", g_variant_new_string(request_token));
-      g_variant_builder_add(&builder, "{sv}", "types", g_variant_new_uint32(SOURCE_TYPE_MONITOR));
+      // A virtual source is one new monitor; GNOME sizes it from the stream format negotiated later
+      g_variant_builder_add(&builder, "{sv}", "types", g_variant_new_uint32(virtual_source ? SOURCE_TYPE_VIRTUAL : SOURCE_TYPE_MONITOR));
       g_variant_builder_add(&builder, "{sv}", "cursor_mode", g_variant_new_uint32(CURSOR_MODE_EMBEDDED));
-      g_variant_builder_add(&builder, "{sv}", "multiple", g_variant_new_boolean(TRUE));
+      g_variant_builder_add(&builder, "{sv}", "multiple", g_variant_new_boolean(!virtual_source));
       if (persist) {
         g_variant_builder_add(&builder, "{sv}", "persist_mode", g_variant_new_uint32(PERSIST_UNTIL_REVOKED));
-        if (!restore_token_t::empty()) {
-          g_variant_builder_add(&builder, "{sv}", "restore_token", g_variant_new_string(restore_token_t::get().c_str()));
+        if (!token_empty()) {
+          g_variant_builder_add(&builder, "{sv}", "restore_token", g_variant_new_string(token().c_str()));
         }
       }
       g_variant_builder_close(&builder);
@@ -747,9 +803,8 @@ namespace portal {
         return -1;
       }
 
-      if (const gchar *new_token = nullptr; g_variant_lookup(dict, "restore_token", "s", &new_token) && new_token && new_token[0] != '\0' && restore_token_t::get() != new_token) {
-        restore_token_t::set(new_token);
-        restore_token_t::save();
+      if (const gchar *new_token = nullptr; g_variant_lookup(dict, "restore_token", "s", &new_token) && new_token && new_token[0] != '\0' && token() != new_token) {
+        store_token(new_token);
       }
 
       GVariantIter iter;
@@ -1003,6 +1058,17 @@ namespace portal {
   class portal_t: public pipewire::pipewire_display_t {
   public:
     int configure_stream(const std::string &display_name, int &out_pipewire_fd, uint32_t &out_pipewire_node, uint64_t &out_pipewire_object_serial [[maybe_unused]]) override {
+      // A session's own virtual monitor arrives as "portal:virtual:WxH", see platf::virtual_display_create
+      int virtual_width = 0;
+      int virtual_height = 0;
+      if (display_name.starts_with(platf::portal_virtual_prefix)) {
+        dbus.virtual_source = std::sscanf(display_name.c_str() + platf::portal_virtual_prefix.size(), "%dx%d", &virtual_width, &virtual_height) == 2;
+        if (!dbus.virtual_source) {
+          BOOST_LOG(error) << "[portalgrab] Expected portal:virtual:<width>x<height>, got ["sv << display_name << ']';
+          return -1;
+        }
+      }
+
       // Connect DBus portal session
       if (dbus.init() < 0) {
         BOOST_LOG(error) << "[portalgrab] Failed to connect to dbus. portal_t setup failed.";
@@ -1044,8 +1110,9 @@ namespace portal {
       // Set/update basic stream parameters on display_t
       this->offset_x = stream.pos_x;
       this->offset_y = stream.pos_y;
-      this->width = stream.width;
-      this->height = stream.height;
+      // The virtual monitor takes the size the stream negotiates, which prefers the display's
+      this->width = dbus.virtual_source ? virtual_width : stream.width;
+      this->height = dbus.virtual_source ? virtual_height : stream.height;
       this->logical_width = 0;  // Explicitly mark for pipewire_display_t to try to figure this out.
       this->logical_height = 0;  // Explicitly Mark for pipewire_display_t to try to figure this out.
       // Flag successful setup

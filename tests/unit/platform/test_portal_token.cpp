@@ -143,6 +143,13 @@ TEST_F(PortalTokenTest, MigratesLegacyTokenAndPreservesContents) {
   EXPECT_EQ(read_token("portal_token.kde"), "legacy-token");
 }
 
+TEST_F(PortalTokenTest, VirtualMonitorTokenIsSeparateFromMonitorToken) {
+  ASSERT_NO_FATAL_FAILURE(write_token("portal_token", "legacy-token"));
+  EXPECT_EQ(portal::get_saved_virtual_token_path_for_testing(token_directory(), "GNOME"), token_directory() / "portal_virtual_token.gnome");
+  EXPECT_EQ(read_token("portal_token"), "legacy-token");
+  EXPECT_FALSE(std::filesystem::exists(token_directory() / "portal_token.gnome"));
+}
+
 TEST_F(PortalTokenTest, MigratesLegacyTokenToUnknownWhenDesktopIsEmpty) {
   ASSERT_NO_FATAL_FAILURE(write_token("portal_token", "legacy-token"));
   EXPECT_EQ(resolve(""), token_directory() / "portal_token.unknown");

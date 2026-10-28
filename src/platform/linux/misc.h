@@ -8,6 +8,8 @@
 #include <chrono>
 #include <fcntl.h>
 #include <filesystem>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -38,6 +40,53 @@ enum class window_system_e {
 };
 
 extern window_system_e window_system;  ///< Window system.
+
+namespace platf {
+  // A session's virtual display is captured by the backend that made it, whatever `capture` selects,
+  // so its output name carries that backend in front of the name the backend knows it by
+  constexpr std::string_view kwin_virtual_prefix = "kwin:";  ///< KWin virtual output, then its output name.
+  constexpr std::string_view wlr_virtual_prefix = "wlr:";  ///< Sway or Hyprland headless output, then its output name.
+  constexpr std::string_view portal_virtual_prefix = "portal:virtual:";  ///< GNOME virtual monitor, then <width>x<height>.
+
+  /**
+   * @brief Make sure KWin lets this executable bind zkde_screencast_unstable_v1.
+   * @details KWin hides the global from clients without a matching desktop file; this writes
+   *          one where needed and waits for KWin to read it.
+   */
+  void kwin_screencast_permission_setup();
+
+  /**
+   * @brief Whether the session's KWin can make virtual outputs.
+   */
+  bool kwin_virtual_display_available();
+
+  /**
+   * @brief Create a KWin virtual output, held open until destroyed.
+   * @return Its output name, empty on failure.
+   */
+  std::string kwin_virtual_display_create(int width, int height, int fps);
+
+  /**
+   * @brief Close a KWin virtual output made by kwin_virtual_display_create().
+   */
+  void kwin_virtual_display_destroy(const std::string &output_name);
+
+  /**
+   * @brief Whether the session runs Sway or Hyprland.
+   */
+  bool wlr_virtual_display_available();
+
+  /**
+   * @brief Create a Sway or Hyprland headless output.
+   * @return Its output name, empty on failure.
+   */
+  std::string wlr_virtual_display_create(int width, int height, int fps);
+
+  /**
+   * @brief Remove a headless output made by wlr_virtual_display_create().
+   */
+  void wlr_virtual_display_destroy(const std::string &output_name);
+}  // namespace platf
 
 namespace dyn {
   /**
@@ -96,6 +145,11 @@ namespace portal {
    * @return Path of the selected test token.
    */
   std::filesystem::path get_saved_token_path_for_testing(const std::filesystem::path &directory, const std::string &desktop);
+
+  /**
+   * @brief Resolve the virtual monitor's saved token like get_saved_token_path_for_testing().
+   */
+  std::filesystem::path get_saved_virtual_token_path_for_testing(const std::filesystem::path &directory, const std::string &desktop);
   #endif
 
   /**

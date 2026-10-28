@@ -706,6 +706,10 @@ namespace kwin {
 
 // Public API for misc.cpp
 namespace platf {
+  void kwin_screencast_permission_setup() {
+    kwin::screencast_permission_helper_t::setup();
+  }
+
   /**
    * @brief Create a KWin screencast display backend.
    *

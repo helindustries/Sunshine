@@ -612,12 +612,52 @@ namespace platf {
     // Nothing to do
   }
 
-  std::string virtual_display_create(int /*width*/, int /*height*/, int /*fps*/) {
-    return {};
+  std::string virtual_display_create([[maybe_unused]] int width, [[maybe_unused]] int height, [[maybe_unused]] int fps) {
+    // KDE and Sway/Hyprland make the output at once; GNOME's virtual monitor exists only while the
+    // portal stream that asks for it does, so its capture creates it from the size in the name
+    std::string output_name;
+    auto desktop_supported = false;
+#ifdef SUNSHINE_BUILD_KWIN
+    if (output_name.empty() && lizardbyte::common::get_env("XDG_CURRENT_DESKTOP").find("KDE") != std::string::npos &&
+        kwin_virtual_display_available()) {
+      desktop_supported = true;
+      if (auto name = kwin_virtual_display_create(width, height, fps); !name.empty()) {
+        output_name = std::string {kwin_virtual_prefix} + name;
+      }
+    }
+#endif
+#ifdef SUNSHINE_BUILD_WAYLAND
+    if (output_name.empty() && wlr_virtual_display_available()) {
+      desktop_supported = true;
+      if (auto name = wlr_virtual_display_create(width, height, fps); !name.empty()) {
+        output_name = std::string {wlr_virtual_prefix} + name;
+      }
+    }
+#endif
+#ifdef SUNSHINE_BUILD_PORTAL
+    if (output_name.empty() && lizardbyte::common::get_env("XDG_CURRENT_DESKTOP").find("GNOME") != std::string::npos) {
+      desktop_supported = true;
+      output_name = std::string {portal_virtual_prefix} + std::to_string(width) + 'x' + std::to_string(height);
+    }
+#endif
+    if (!desktop_supported) {
+      BOOST_LOG(info) << "No virtual displays on this desktop: they need KDE Plasma, GNOME, Sway or Hyprland"sv;
+    }
+    return output_name;
   }
 
-  void virtual_display_destroy(const std::string & /*output_name*/) {
-    // No virtual displays are created on Linux
+  void virtual_display_destroy(const std::string &output_name) {
+#ifdef SUNSHINE_BUILD_KWIN
+    if (output_name.starts_with(kwin_virtual_prefix)) {
+      kwin_virtual_display_destroy(output_name.substr(kwin_virtual_prefix.size()));
+    }
+#endif
+#ifdef SUNSHINE_BUILD_WAYLAND
+    if (output_name.starts_with(wlr_virtual_prefix)) {
+      wlr_virtual_display_destroy(output_name.substr(wlr_virtual_prefix.size()));
+    }
+#endif
+    // A portal virtual monitor ends with the stream that capture opened for it
   }
 
   std::string get_clipboard() {
@@ -1379,6 +1419,26 @@ namespace platf {
   }
 
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
+    // A session's virtual display only exists for the backend that made it, see virtual_display_create
+#ifdef SUNSHINE_BUILD_KWIN
+    if (display_name.starts_with(kwin_virtual_prefix)) {
+      BOOST_LOG(info) << "Screencasting a KWin virtual output"sv;
+      return kwin_display(hwdevice_type, display_name.substr(kwin_virtual_prefix.size()), config);
+    }
+#endif
+#ifdef SUNSHINE_BUILD_WAYLAND
+    if (display_name.starts_with(wlr_virtual_prefix)) {
+      BOOST_LOG(info) << "Screencasting a headless output with Wayland's protocol"sv;
+      return wl_display(hwdevice_type, display_name.substr(wlr_virtual_prefix.size()), config);
+    }
+#endif
+#ifdef SUNSHINE_BUILD_PORTAL
+    if (display_name.starts_with(portal_virtual_prefix)) {
+      BOOST_LOG(info) << "Screencasting a portal virtual monitor"sv;
+      return portal_display(hwdevice_type, display_name, config);
+    }
+#endif
+
     // Please ensure that KMS followed by CUDA remains at the top so that we can
     // drop DRM worker privileges once neither backend requires it.
 
