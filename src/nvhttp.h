@@ -53,6 +53,39 @@ namespace nvhttp {
   constexpr auto PORT_HTTPS = -5;
 
   /**
+   * @brief Per-client permission bits, the values Apollo and Artemis use for `<Permission>`.
+   */
+  namespace permission {
+    constexpr std::uint32_t input_controller = 0x100;  ///< Controller input.
+    constexpr std::uint32_t input_touch = 0x200;  ///< Touch input.
+    constexpr std::uint32_t input_pen = 0x400;  ///< Pen input.
+    constexpr std::uint32_t input_mouse = 0x800;  ///< Mouse input.
+    constexpr std::uint32_t input_keyboard = 0x1000;  ///< Keyboard input.
+    constexpr std::uint32_t clipboard_set = 0x10000;  ///< Set the host clipboard from the client.
+    constexpr std::uint32_t clipboard_read = 0x20000;  ///< Read the host clipboard.
+    constexpr std::uint32_t file_upload = 0x40000;  ///< Upload files to the host.
+    constexpr std::uint32_t file_download = 0x80000;  ///< Download files from the host.
+    constexpr std::uint32_t server_command = 0x100000;  ///< Run configured server commands.
+    constexpr std::uint32_t list = 0x1000000;  ///< List apps.
+    constexpr std::uint32_t view = 0x2000000;  ///< View streams.
+    constexpr std::uint32_t launch = 0x4000000;  ///< Launch apps.
+
+    constexpr std::uint32_t all_inputs = input_controller | input_touch | input_pen | input_mouse | input_keyboard;  ///< Every input permission.
+    constexpr std::uint32_t all_operations = clipboard_set | clipboard_read | file_upload | file_download | server_command;  ///< Every operation permission.
+    constexpr std::uint32_t all_actions = list | view | launch;  ///< Every action permission.
+    constexpr std::uint32_t defaults = view | list;  ///< Granted to clients paired after the first.
+    constexpr std::uint32_t all = all_inputs | all_operations | all_actions;  ///< Granted to the first paired client.
+  }  // namespace permission
+
+  /**
+   * @brief Permission bits of a paired client.
+   *
+   * @param cert_pem PEM certificate the client presented.
+   * @return Its nvhttp::permission bits, none for an unknown certificate.
+   */
+  std::uint32_t client_permissions(std::string_view cert_pem);
+
+  /**
    * @brief Maximum number of pairing sessions retained at one time.
    */
   constexpr std::size_t MAX_PENDING_PAIRING_SESSIONS = 32;

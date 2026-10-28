@@ -620,6 +620,14 @@ namespace platf {
     // No virtual displays are created on Linux
   }
 
+  std::string get_clipboard() {
+    return {};
+  }
+
+  bool set_clipboard(const std::string & /*content*/) {
+    return false;
+  }
+
   /**
    * @brief Request a Sunshine process restart on exit.
    */

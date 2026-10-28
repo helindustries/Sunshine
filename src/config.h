@@ -370,6 +370,15 @@ namespace config {
   };
 
   /**
+   * @brief A command a streaming client may run on the host, Apollo's server command extension.
+   */
+  struct server_cmd_t {
+    std::string name;  ///< Name the client lists the command under.
+    std::string cmd;  ///< Command line run on the host.
+    bool elevated;  ///< Whether the process should be launched elevated.
+  };
+
+  /**
    * @brief Top-level Sunshine configuration and credential state.
    */
   struct sunshine_t {
@@ -403,6 +412,7 @@ namespace config {
     bool notify_pre_releases;  ///< Notify users about pre-release updates.
     bool system_tray;  ///< Enable the system tray integration.
     std::vector<prep_cmd_t> prep_cmds;  ///< Preparation commands executed around application launch.
+    std::vector<server_cmd_t> server_cmds;  ///< Commands streaming clients may run, by their index in this list.
 
     // List of allowed origins for CSRF protection (e.g., "https://example.com,https://app.example.com")
     // Comma-separated list of additional origins. Default includes localhost variants and web UI port.

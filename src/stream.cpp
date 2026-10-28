@@ -30,6 +30,7 @@ extern "C" {
 #include "input.h"
 #include "logging.h"
 #include "network.h"
+#include "nvhttp.h"
 #include "platform/common.h"
 #include "process.h"
 #include "stream.h"
@@ -54,8 +55,9 @@ constexpr int IDX_SET_MOTION_EVENT = 13;  ///< Control-stream message index for 
 constexpr int IDX_SET_RGB_LED = 14;  ///< Control-stream message index for set rgb led.
 constexpr int IDX_SET_ADAPTIVE_TRIGGERS = 15;  ///< Control-stream message index for set adaptive triggers.
 constexpr int IDX_SET_PLAYER_LEDS = 16;  ///< Control-stream message index for set player indicator LEDs.
+constexpr int IDX_EXEC_SERVER_CMD = 17;  ///< Control-stream message index for running a server command.
 
-static const std::array<short, 17> packetTypes = {
+static const std::array<short, 18> packetTypes = {
   0x0305,  // Start A
   0x0307,  // Start B
   0x0301,  // Invalidate reference frames
@@ -73,6 +75,7 @@ static const std::array<short, 17> packetTypes = {
   0x5502,  // Set RGB LED (Sunshine protocol extension)
   0x5503,  // Set Adaptive triggers (Sunshine protocol extension)
   0x5504,  // Set player indicator LEDs (Sunshine protocol extension)
+  0x3000,  // Execute server command (Apollo protocol extension)
 };
 
 namespace asio = boost::asio;
@@ -1185,6 +1188,31 @@ namespace stream {
 
     server->map(packetTypes[IDX_START_B], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_START_B]"sv;
+    });
+
+    // Apollo's server commands: the payload is the index into the list serverinfo sent
+    server->map(packetTypes[IDX_EXEC_SERVER_CMD], [](session_t *session, const std::string_view &payload) {
+      if (payload.empty()) {
+        BOOST_LOG(warning) << "Server command packet without a command index"sv;
+      } else if (!(nvhttp::client_permissions(session->client_cert) & nvhttp::permission::server_command)) {
+        BOOST_LOG(info) << "Server command denied: the client lacks the server command permission"sv;
+      } else if (const auto index = static_cast<std::uint8_t>(payload[0]); index >= config::sunshine.server_cmds.size()) {
+        BOOST_LOG(warning) << "Server command index "sv << static_cast<int>(index) << " out of range, "sv << config::sunshine.server_cmds.size() << " configured"sv;
+      } else {
+        const auto server_cmd {config::sunshine.server_cmds[index]};
+        BOOST_LOG(info) << "Running server command ["sv << server_cmd.name << ']';
+        std::thread {[server_cmd]() {
+          std::error_code ec;
+          boost::process::v1::environment env = boost::this_process::environment();
+          auto working_dir = proc::find_working_directory(server_cmd.cmd, env);
+          // Not interactive: a server command must not open a console window on the host's desktop
+          if (auto child = platf::run_command(server_cmd.elevated, false, server_cmd.cmd, working_dir, env, nullptr, ec, nullptr); ec) {
+            BOOST_LOG(error) << "Couldn't run server command ["sv << server_cmd.name << "]: "sv << ec.message();
+          } else {
+            child.detach();
+          }
+        }}.detach();
+      }
     });
 
     server->map(packetTypes[IDX_LOSS_STATS], [&](session_t *session, const std::string_view &payload) {

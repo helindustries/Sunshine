@@ -1295,6 +1295,46 @@ namespace platf {
     }
   }
 
+  std::string get_clipboard() {
+    std::string content;
+    if (OpenClipboard(nullptr)) {
+      if (const auto data = GetClipboardData(CF_UNICODETEXT); data != nullptr) {
+        if (const auto *text = static_cast<const wchar_t *>(GlobalLock(data)); text != nullptr) {
+          content = utf_utils::to_utf8(std::wstring {text});
+          GlobalUnlock(data);
+        }
+      }
+      CloseClipboard();
+    } else {
+      BOOST_LOG(warning) << "Couldn't open the clipboard: "sv << GetLastError();
+    }
+    return content;
+  }
+
+  bool set_clipboard(const std::string &content) {
+    auto set = false;
+    const auto text {utf_utils::from_utf8(content)};
+    const auto bytes = (text.size() + 1) * sizeof(wchar_t);
+    if (OpenClipboard(nullptr)) {
+      // On success the clipboard owns the memory; it is freed here only if handing it over failed
+      if (auto memory = GlobalAlloc(GMEM_MOVEABLE, bytes); memory != nullptr) {
+        if (auto *target = GlobalLock(memory); target != nullptr) {
+          std::memcpy(target, text.c_str(), bytes);
+          GlobalUnlock(memory);
+          set = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
+        }
+        if (!set) {
+          GlobalFree(memory);
+        }
+      }
+      CloseClipboard();
+    }
+    if (!set) {
+      BOOST_LOG(warning) << "Couldn't set the clipboard: "sv << GetLastError();
+    }
+    return set;
+  }
+
   void streaming_will_stop() {
     // Demote ourselves back to normal priority class
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);

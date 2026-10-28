@@ -991,13 +991,18 @@ namespace display_device {
 
   std::string acquire_virtual_display(const config::video_t &video_config, const rtsp_stream::launch_session_t &session) {
     std::string output_name;
-    if (video_config.virtual_display == "enabled" && session.width > 0 && session.height > 0 && session.fps > 0) {
+    const auto wanted {video_config.virtual_display == "enabled" || session.virtual_display_requested};
+    if (wanted && session.width > 0 && session.height > 0 && session.fps > 0) {
+      // A scale factor renders the desktop larger or smaller than the stream; the sizes stay even
+      const auto width {session.width * session.scale_factor / 100 & ~1};
+      const auto height {session.height * session.scale_factor / 100 & ~1};
+      const auto fps {session.fps};
       const auto client_id {client_id_for(session)};
       std::unique_lock lock {virtual_screens_mutex};
 
       // Of the client's free displays, prefer one that already has the requested mode
       auto free_screen = std::ranges::find_if(virtual_screens, [&](const auto &screen) {
-        return !screen.in_use && screen.client_id == client_id && screen.width == session.width && screen.height == session.height && screen.fps == session.fps;
+        return !screen.in_use && screen.client_id == client_id && screen.width == width && screen.height == height && screen.fps == fps;
       });
       if (free_screen == virtual_screens.end()) {
         free_screen = std::ranges::find_if(virtual_screens, [&](const auto &screen) {
@@ -1005,21 +1010,21 @@ namespace display_device {
         });
       }
 
-      if (free_screen != virtual_screens.end() && free_screen->width == session.width && free_screen->height == session.height && free_screen->fps == session.fps) {
+      if (free_screen != virtual_screens.end() && free_screen->width == width && free_screen->height == height && free_screen->fps == fps) {
         free_screen->in_use = true;
         output_name = free_screen->output_name;
-        BOOST_LOG(info) << "Reusing virtual display "sv << output_name << " ("sv << session.width << 'x' << session.height << '@' << session.fps << "Hz)"sv;
+        BOOST_LOG(info) << "Reusing virtual display "sv << output_name << " ("sv << width << 'x' << height << '@' << fps << "Hz)"sv;
       } else {
         if (free_screen != virtual_screens.end()) {
-          BOOST_LOG(info) << "Recreating virtual display "sv << free_screen->output_name << " at "sv << session.width << 'x' << session.height << '@' << session.fps << "Hz"sv;
+          BOOST_LOG(info) << "Recreating virtual display "sv << free_screen->output_name << " at "sv << width << 'x' << height << '@' << fps << "Hz"sv;
           platf::virtual_display_destroy(free_screen->output_name);
           virtual_screens.erase(free_screen);
         }
 
-        output_name = platf::virtual_display_create(session.width, session.height, session.fps);
+        output_name = platf::virtual_display_create(width, height, fps);
         if (!output_name.empty()) {
-          virtual_screens.push_back({client_id, output_name, session.width, session.height, session.fps, true});
-          BOOST_LOG(info) << "Created virtual display "sv << output_name << " ("sv << session.width << 'x' << session.height << '@' << session.fps << "Hz, "sv << virtual_screens.size() << " in total)"sv;
+          virtual_screens.push_back({client_id, output_name, width, height, fps, true});
+          BOOST_LOG(info) << "Created virtual display "sv << output_name << " ("sv << width << 'x' << height << '@' << fps << "Hz, "sv << virtual_screens.size() << " in total)"sv;
           lock.unlock();
           // Give the window server time to register the display before capture
           std::this_thread::sleep_for(5s);

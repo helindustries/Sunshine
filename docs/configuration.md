@@ -254,6 +254,30 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### server_cmd
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            A list of commands a streaming client may run on the host, such as Artemis's server
+            commands menu. Clients see them by name and need the server command permission.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            []
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            server_cmd = [{"name":"Lock screen","cmd":"rundll32.exe user32.dll,LockWorkStation","elevated":false}]
+            @endcode</td>
+    </tr>
+</table>
+
 ### notify_pre_releases
 
 <table>

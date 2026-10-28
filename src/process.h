@@ -242,5 +242,14 @@ namespace proc {
    */
   void terminate_process_group(boost::process::v1::child &child_process, boost::process::v1::group &group, std::chrono::seconds exit_timeout);
 
+  /**
+   * @brief Resolve the working directory for a configured command.
+   *
+   * @param cmd Command line to execute or inspect.
+   * @param env Environment variables for the child process.
+   * @return Directory used to launch the command, falling back to PATH lookup when needed.
+   */
+  boost::filesystem::path find_working_directory(const std::string &cmd, boost::process::v1::environment &env);
+
   extern proc_t proc;
 }  // namespace proc

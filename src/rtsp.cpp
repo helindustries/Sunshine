@@ -10,6 +10,7 @@ extern "C" {
 }
 
 // standard includes
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <format>
@@ -594,6 +595,18 @@ namespace rtsp_stream {
       return (int) _session_slots->size();
     }
 
+    /**
+     * @brief Whether a client has a session streaming right now.
+     * @param client_cert PEM certificate of the client.
+     * @return True if one of its sessions is running.
+     */
+    bool client_streaming(const std::string &client_cert) {
+      auto lg = _session_slots.lock();
+      return std::ranges::any_of(*_session_slots, [&client_cert](const auto &slot) {
+        return stream::session::state(*slot) == stream::session::state_e::RUNNING && stream::session::client_cert(*slot) == client_cert;
+      });
+    }
+
     safe::event_t<std::shared_ptr<launch_session_t>> launch_event;  ///< Launch event.
 
     /**
@@ -721,6 +734,10 @@ namespace rtsp_stream {
 
   bool launch_pending() {
     return static_cast<bool>(server.launch_event.view(0s));
+  }
+
+  bool client_streaming(const std::string &client_cert) {
+    return server.client_streaming(client_cert);
   }
 
   int session_count() {

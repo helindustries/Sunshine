@@ -529,6 +529,20 @@ namespace platf {
     return display_id == 0 ? std::string {} : std::to_string(display_id);
   }
 
+  std::string get_clipboard() {
+    std::string content;
+    if (NSString *text = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString]; text != nil) {
+      content = text.UTF8String;
+    }
+    return content;
+  }
+
+  bool set_clipboard(const std::string &content) {
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    return [pasteboard setString:[NSString stringWithUTF8String:content.c_str()] forType:NSPasteboardTypeString];
+  }
+
   void virtual_display_destroy(const std::string &output_name) {
     std::uint32_t display_id {};
     if (const auto [end, ec] = std::from_chars(output_name.data(), output_name.data() + output_name.size(), display_id); ec == std::errc {} && display_id != 0) {

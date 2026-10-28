@@ -1334,6 +1334,19 @@ namespace platf {
    */
   void virtual_display_destroy(const std::string &output_name);
 
+  /**
+   * @brief Read the host clipboard as text.
+   * @return UTF-8 text, empty when the clipboard holds no text or the platform has no clipboard.
+   */
+  std::string get_clipboard();
+
+  /**
+   * @brief Replace the host clipboard with text.
+   * @param content UTF-8 text.
+   * @return Whether the clipboard now holds the text.
+   */
+  bool set_clipboard(const std::string &content);
+
   constexpr auto SERVICE_NAME = "Sunshine";  ///< mDNS service instance name advertised for GameStream discovery.
   constexpr auto SERVICE_TYPE = "_nvstream._tcp";  ///< mDNS service type advertised for GameStream discovery.
 

@@ -100,6 +100,8 @@ namespace rtsp_stream {
     uint32_t rtsp_iv_counter;  ///< Counter value mixed into encrypted RTSP IVs.
     std::string client_cert;  ///< PEM certificate for the paired Moonlight client.
     std::string output_name;  ///< Virtual display acquired for this launch; empty captures the configured display.
+    bool virtual_display_requested {};  ///< Client asked for a virtual display (Apollo's virtualDisplay=1), whatever the config says.
+    int scale_factor {100};  ///< Virtual display size in percent of the stream size (Apollo's scaleFactor).
   };
 
   /**
@@ -126,6 +128,13 @@ namespace rtsp_stream {
    * @return True while a launched session has not started streaming yet.
    */
   bool launch_pending();
+
+  /**
+   * @brief Whether a client has a session streaming right now.
+   * @param client_cert PEM certificate of the client.
+   * @return True if one of its sessions is running.
+   */
+  bool client_streaming(const std::string &client_cert);
 
   /**
    * @brief Terminates all running streaming sessions.

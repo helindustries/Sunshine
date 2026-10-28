@@ -911,6 +911,7 @@ namespace config {
     false,  // notify_pre_releases
     true,  // system_tray
     {},  // prep commands
+    {},  // server commands
     {},  // csrf_allowed_origins
   };
 
@@ -1489,6 +1490,31 @@ namespace config {
   }
 
   /**
+   * @brief Consume a JSON list of server commands, `[{"name":"...","cmd":"...","elevated":false}]`.
+   *
+   * @param vars Parsed configuration entries; consumed keys are erased.
+   * @param name Configuration key to consume.
+   * @param destination Commands parsed from the setting.
+   */
+  void list_server_cmd_f(config_map_t &vars, const std::string &name, std::vector<server_cmd_t> &destination) {
+    std::string string;
+    string_f(vars, name, string);
+
+    if (!string.empty()) {
+      // ptree parses only objects, so the list is wrapped in one
+      std::stringstream jsonStream;
+      jsonStream << "{\"server_cmd\":" << string << "}";
+
+      boost::property_tree::ptree jsonTree;
+      boost::property_tree::read_json(jsonStream, jsonTree);
+
+      for (auto &[_, server_cmd] : jsonTree.get_child("server_cmd"s)) {
+        destination.push_back({server_cmd.get<std::string>("name"s, ""), server_cmd.get<std::string>("cmd"s, ""), server_cmd.get<bool>("elevated"s, false)});
+      }
+    }
+  }
+
+  /**
    * @brief Consume an integer list setting from decimal or hexadecimal configuration text.
    *
    * @param vars Parsed configuration entries; consumed keys are erased.
@@ -1771,6 +1797,7 @@ namespace config {
 
     string_f(vars, "external_ip", nvhttp.external_ip);
     list_prep_cmd_f(vars, "global_prep_cmd", config::sunshine.prep_cmds);
+    list_server_cmd_f(vars, "server_cmd", config::sunshine.server_cmds);
 
     string_f(vars, "audio_sink", audio.sink);
     string_f(vars, "virtual_sink", audio.virtual_sink);

@@ -408,6 +408,8 @@
     "qsv_slow_hevc_desc": "This can enable HEVC encoding on older Intel GPUs, at the cost of higher GPU usage and worse performance.",
     "restart_note": "Sunshine is restarting to apply changes.",
     "search_options": "Search configuration options...",
+    "server_cmd": "Server Commands",
+    "server_cmd_desc": "Commands a streaming client may run on this host, listed by name. Clients need the server command permission.",
     "stream_audio": "Stream Audio",
     "stream_audio_desc": "Whether to stream audio or not. Disabling this can be useful for streaming headless displays as second monitors.",
     "sunshine_name": "Sunshine Name",

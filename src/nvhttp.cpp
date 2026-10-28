@@ -184,6 +184,7 @@ namespace nvhttp {
     std::string uuid;  ///< Persistent Moonlight client UUID associated with the certificate.
     std::string cert;  ///< Certificate PEM string or path.
     bool enabled = true;  ///< Whether this persisted client entry may connect.
+    std::uint32_t perm = permission::all;  ///< nvhttp::permission bits; records saved before permissions existed keep everything.
   };
 
   /**
@@ -290,6 +291,7 @@ namespace nvhttp {
       named_cert_node.put("cert"s, named_cert.cert);
       named_cert_node.put("uuid"s, named_cert.uuid);
       named_cert_node.put("enabled"s, named_cert.enabled);
+      named_cert_node.put("perm"s, named_cert.perm);
       named_cert_nodes.push_back(std::make_pair(""s, named_cert_node));
     }
     root.add_child("root.named_devices"s, named_cert_nodes);
@@ -426,6 +428,7 @@ namespace nvhttp {
         named_cert.cert = el.get_child("cert").get_value<std::string>();
         named_cert.uuid = el.get_child("uuid").get_value<std::string>();
         named_cert.enabled = el.get<bool>("enabled", true);
+        named_cert.perm = el.get<std::uint32_t>("perm", permission::all);
         client.named_devices.emplace_back(named_cert);
       }
     }
@@ -468,6 +471,8 @@ namespace nvhttp {
       auto existing_certificate = crypto::x509(existing_client.cert);
       return existing_certificate && X509_cmp(existing_certificate.get(), certificate.get()) == 0;
     });
+    // The first client paired with this host is its owner; later ones may view and list until granted more
+    named_cert.perm = client_root.named_devices.empty() ? permission::all : permission::defaults;
     client_root.named_devices.emplace_back(std::move(named_cert));
     rebuild_client_cert_chain();
 
@@ -475,6 +480,18 @@ namespace nvhttp {
       save_state();
     }
     return uuid;
+  }
+
+  /**
+   * @brief Permission bits of a paired client.
+   *
+   * @param cert_pem PEM certificate the client presented.
+   * @return Its nvhttp::permission bits, none for an unknown certificate.
+   */
+  std::uint32_t client_permissions(const std::string_view cert_pem) {
+    std::lock_guard lock {client_auth_mutex()};
+    const auto named_cert = std::ranges::find(client_root.named_devices, cert_pem, &named_cert_t::cert);
+    return named_cert != client_root.named_devices.end() ? named_cert->perm : 0;
   }
 
   /**
@@ -517,6 +534,8 @@ namespace nvhttp {
     launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
+    launch_session->virtual_display_requested = util::from_view(get_arg(args, "virtualDisplay", "0"));
+    launch_session->scale_factor = std::clamp((int) util::from_view(get_arg(args, "scaleFactor", "100")), 20, 400);
 
     // Encrypted RTSP is enabled with client reported corever >= 1
     auto corever = util::from_view(get_arg(args, "corever", "0"));
@@ -1297,6 +1316,19 @@ namespace nvhttp {
       tree.put("root.ExternalIP", config::nvhttp.external_ip);
     }
 
+    // Apollo's extension: Artemis shows these and offers clipboard and server commands by them
+    if constexpr (std::is_same_v<SunshineHTTPS, T>) {
+      const auto permissions {client_permissions(last_verified_client_cert)};
+      tree.put("root.Permission", std::to_string(permissions));
+      if (permissions & permission::server_command) {
+        for (const auto &server_cmd : config::sunshine.server_cmds) {
+          tree.add("root.ServerCommand", server_cmd.name);
+        }
+      }
+    } else {
+      tree.put("root.Permission", "0");
+    }
+
     auto current_appid = proc::proc.running();
     tree.put("root.PairStatus", pair_status);
     tree.put("root.currentgame", current_appid);
@@ -1592,6 +1624,43 @@ namespace nvhttp {
   }
 
   /**
+   * @brief Apollo's clipboard extension: GET reads the host clipboard, POST sets it from the body.
+   * @details Only text, only for a client streaming right now, and only with the matching
+   *          permission; Artemis syncs on stream start and when its window loses focus.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void clipboard(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    const auto client_cert {last_verified_client_cert};
+    const auto setting {request->method == "POST"};
+    const auto required {(setting ? permission::clipboard_set : permission::clipboard_read) | permission::view};
+    auto status {SimpleWeb::StatusCode::success_ok};
+    std::string content;
+
+    if (auto args = request->parse_query_string(); get_arg(args, "type", "") != "text"sv) {
+      status = SimpleWeb::StatusCode::client_error_bad_request;
+    } else if ((client_permissions(client_cert) & required) != required) {
+      BOOST_LOG(debug) << "Clipboard "sv << (setting ? "write"sv : "read"sv) << " denied for "sv << last_verified_client_name;
+      status = SimpleWeb::StatusCode::client_error_unauthorized;
+    } else if (!rtsp_stream::client_streaming(client_cert)) {
+      status = SimpleWeb::StatusCode::client_error_forbidden;
+    } else if (setting) {
+      if (!platf::set_clipboard(request->content.string())) {
+        BOOST_LOG(warning) << "Couldn't set the host clipboard"sv;
+        status = SimpleWeb::StatusCode::server_error_internal_server_error;
+      }
+    } else {
+      content = platf::get_clipboard();
+    }
+
+    response->write(status, content);
+    response->close_connection_after_response = true;
+  }
+
+  /**
    * @brief Check whether cel.
    *
    * @param response HTTP response object to populate.
@@ -1761,6 +1830,8 @@ namespace nvhttp {
       resume(host_audio, resp, req);
     };
     https_server.resource["^/cancel$"]["GET"] = cancel;
+    https_server.resource["^/actions/clipboard$"]["GET"] = clipboard;
+    https_server.resource["^/actions/clipboard$"]["POST"] = clipboard;
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::get_bind_address(address_family);
