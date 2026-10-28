@@ -6,6 +6,7 @@
 #include <array>
 #include <fcntl.h>
 #include <future>
+#include <mutex>
 #include <stdexcept>
 #include <string_view>
 
@@ -492,6 +493,21 @@ namespace egl {
     return eglGetError() != EGL_SUCCESS;
   }
 
+  namespace {
+    std::recursive_mutex egl_lifecycle_mutex;
+  }  // namespace
+
+  void terminate_display(EGLDisplay display) {
+    std::lock_guard lock {egl_lifecycle_mutex};
+    eglTerminate(display);
+  }
+
+  void destroy_context(EGLDisplay display, EGLContext context) {
+    std::lock_guard lock {egl_lifecycle_mutex};
+    eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    eglDestroyContext(display, context);
+  }
+
   display_t make_display(std::variant<gbm::gbm_t::pointer, wl_display *, _XDisplay *> native_display) {
     int egl_platform;
     void *native_display_p;
@@ -513,6 +529,10 @@ namespace egl {
         BOOST_LOG(error) << "egl::make_display(): Index ["sv << native_display.index() << "] not implemented"sv;
         return nullptr;
     }
+
+    // Every session's capture thread opens displays, and gladLoaderLoadEGL below rewrites the
+    // process-wide EGL entry points; a failure below terminates the display under this lock
+    std::lock_guard lock {egl_lifecycle_mutex};
 
     // Initialize EGL with the selected platform and its native display handle.
     EGLDisplay raw_display = EGL_NO_DISPLAY;
@@ -605,7 +625,11 @@ namespace egl {
     }
     attr.push_back(EGL_NONE);
 
-    EGLContext raw_ctx = egl::privileged_egl_worker::eglCreateContext_privileged(display, conf, EGL_NO_CONTEXT, attr.data(), nice_warning);
+    EGLContext raw_ctx = EGL_NO_CONTEXT;
+    {
+      std::lock_guard lock {egl_lifecycle_mutex};
+      raw_ctx = egl::privileged_egl_worker::eglCreateContext_privileged(display, conf, EGL_NO_CONTEXT, attr.data(), nice_warning);
+    }
     if (raw_ctx == EGL_NO_CONTEXT) {
       return std::nullopt;
     }

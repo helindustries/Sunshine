@@ -383,9 +383,21 @@ namespace gbm {
 
 namespace egl {
   /**
+   * @brief eglTerminate, serialized with display and context creation.
+   * @details Mesa shares one screen between the displays on a device, so one session's capture
+   *          tearing its display down while another session's builds one crashes inside Mesa.
+   */
+  void terminate_display(EGLDisplay display);
+
+  /**
+   * @brief eglDestroyContext, serialized like terminate_display().
+   */
+  void destroy_context(EGLDisplay display, EGLContext context);
+
+  /**
    * @brief Owning pointer for an EGL display connection.
    */
-  using display_t = util::dyn_safe_ptr_v2<void, EGLBoolean, &eglTerminate>;
+  using display_t = util::safe_ptr<void, &terminate_display>;
 
   /**
    * @brief RGB capture image backed by EGL and OpenGL resources.
@@ -464,8 +476,7 @@ namespace egl {
   KITTY_USING_MOVE_T(ctx_t, (std::tuple<display_t::pointer, EGLContext>), , {
     TUPLE_2D_REF(disp, ctx, el);
     if (ctx) {
-      eglMakeCurrent(disp, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-      eglDestroyContext(disp, ctx);
+      destroy_context(disp, ctx);
     }
   });
 #else
