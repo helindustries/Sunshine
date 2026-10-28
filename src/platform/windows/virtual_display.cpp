@@ -10,6 +10,7 @@
 
 // standard includes
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <mutex>
 #include <string>
@@ -27,10 +28,22 @@ using namespace std::literals;
 namespace platf {
   namespace {
     constexpr auto max_virtual_displays = 16;
+    constexpr auto display_appear_timeout = 5s;
+    constexpr auto display_extend_after = 1500ms;
 
     std::mutex sudovda_mutex;
     HANDLE sudovda_handle = INVALID_HANDLE_VALUE;
-    std::map<std::string, int> sudovda_displays;  ///< Slot by output name.
+    /**
+     * @brief A virtual display we made: its slot and the mode it was made for.
+     */
+    struct sudovda_display_t {
+      int slot;  ///< Index of its fixed monitor GUID.
+      int width;  ///< Requested width in pixels.
+      int height;  ///< Requested height in pixels.
+      int fps;  ///< Requested refresh rate.
+    };
+
+    std::map<std::string, sudovda_display_t> sudovda_displays;  ///< By output name.
 
     /**
      * @brief The monitor GUID of a slot. Fixed GUIDs let a restart remove displays a crashed run left
@@ -57,6 +70,37 @@ namespace platf {
         }
         if (!found) {
           BOOST_LOG(warning) << "SudoVDA: couldn't render on adapter ["sv << adapter_name << "], it keeps its default"sv;
+        }
+      }
+    }
+
+    /**
+     * @brief Give a virtual display the mode it was created for, where Windows restored another.
+     * @details Extending the desktop brings back the mode Windows saved for the monitor, not the
+     *          one SudoVDA was asked for.
+     */
+    void set_display_mode(const wchar_t *device_name, int width, int height, int fps) {
+      DEVMODEW mode {};
+      mode.dmSize = sizeof(mode);
+      if (EnumDisplaySettingsW(device_name, ENUM_CURRENT_SETTINGS, &mode) &&
+          (mode.dmPelsWidth != static_cast<DWORD>(width) || mode.dmPelsHeight != static_cast<DWORD>(height) || mode.dmDisplayFrequency != static_cast<DWORD>(fps))) {
+        mode.dmPelsWidth = width;
+        mode.dmPelsHeight = height;
+        mode.dmDisplayFrequency = fps;
+        mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+        auto status = ChangeDisplaySettingsExW(device_name, &mode, nullptr, CDS_UPDATEREGISTRY, nullptr);
+        if (status == DISP_CHANGE_BADMODE) {
+          mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+          status = ChangeDisplaySettingsExW(device_name, &mode, nullptr, CDS_UPDATEREGISTRY, nullptr);
+        }
+        if (status != DISP_CHANGE_SUCCESSFUL) {
+          std::string offered;
+          DEVMODEW listed {};
+          listed.dmSize = sizeof(listed);
+          for (DWORD index = 0; offered.size() < 400 && EnumDisplaySettingsW(device_name, index, &listed); ++index) {
+            offered += ' ' + std::to_string(listed.dmPelsWidth) + 'x' + std::to_string(listed.dmPelsHeight) + '@' + std::to_string(listed.dmDisplayFrequency);
+          }
+          BOOST_LOG(warning) << "SudoVDA: couldn't set "sv << width << 'x' << height << '@' << fps << " on the new display ("sv << status << "), it offers:"sv << offered;
         }
       }
     }
@@ -102,7 +146,7 @@ namespace platf {
     std::lock_guard lock {sudovda_mutex};
 
     auto slot = 0;
-    while (slot < max_virtual_displays && std::ranges::any_of(sudovda_displays, [slot](const auto &display) { return display.second == slot; })) {
+    while (slot < max_virtual_displays && std::ranges::any_of(sudovda_displays, [slot](const auto &display) { return display.second.slot == slot; })) {
       ++slot;
     }
 
@@ -112,15 +156,33 @@ namespace platf {
       const auto guid {slot_guid(slot)};
       SUDOVDA::VIRTUAL_DISPLAY_ADD_OUT added;
       if (SUDOVDA::AddVirtualDisplay(sudovda_handle, width, height, fps, guid, "Sunshine", "Sunshine", added)) {
-        // The display appears in the display configuration a moment after the driver adds it
+        // The display reaches the active display configuration a while after the driver adds it,
+        // about 1.1 s on an Intel Iris Xe alone. Windows keeps it detached instead when the
+        // topology it saved for this set of displays has no place for it, so after a while the
+        // topology is extended, as Win+P "Extend" would
         wchar_t device_name[CCHDEVICENAME] {};
-        for (auto delay = 20ms; !SUDOVDA::GetAddedDisplayName(added, device_name) && delay <= 640ms; delay *= 2) {
-          std::this_thread::sleep_for(delay);
+        const auto started = std::chrono::steady_clock::now();
+        auto extended = false;
+        while (!SUDOVDA::GetAddedDisplayName(added, device_name) && std::chrono::steady_clock::now() - started < display_appear_timeout) {
+          if (!extended && std::chrono::steady_clock::now() - started >= display_extend_after) {
+            extended = true;
+            const auto status = SetDisplayConfig(0, nullptr, 0, nullptr, SDC_APPLY | SDC_TOPOLOGY_EXTEND);
+            BOOST_LOG(info) << "SudoVDA: the new display stayed detached, extending the desktop to it: "sv << (status == ERROR_SUCCESS ? "done"sv : "failed"sv) << " ("sv << status << ')';
+          }
+          std::this_thread::sleep_for(50ms);
         }
 
         if (device_name[0] != L'\0') {
+          set_display_mode(device_name, width, height, fps);
+          // Extending also put back the saved modes of the displays other sessions stream
+          if (extended) {
+            for (const auto &[name, display] : sudovda_displays) {
+              set_display_mode(utf_utils::from_utf8(name).c_str(), display.width, display.height, display.fps);
+            }
+          }
           output_name = utf_utils::to_utf8(device_name);
-          sudovda_displays.emplace(output_name, slot);
+          sudovda_displays.emplace(output_name, sudovda_display_t {slot, width, height, fps});
+          BOOST_LOG(debug) << "SudoVDA: "sv << output_name << " appeared after "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count() << " ms"sv;
         } else {
           BOOST_LOG(error) << "SudoVDA: the new virtual display never appeared, removing it"sv;
           SUDOVDA::RemoveVirtualDisplay(sudovda_handle, guid);
@@ -135,7 +197,7 @@ namespace platf {
   void virtual_display_destroy(const std::string &output_name) {
     std::lock_guard lock {sudovda_mutex};
     if (const auto display = sudovda_displays.find(output_name); display != sudovda_displays.end()) {
-      if (!SUDOVDA::RemoveVirtualDisplay(sudovda_handle, slot_guid(display->second))) {
+      if (!SUDOVDA::RemoveVirtualDisplay(sudovda_handle, slot_guid(display->second.slot))) {
         BOOST_LOG(warning) << "SudoVDA: couldn't remove virtual display ["sv << output_name << ']';
       }
       sudovda_displays.erase(display);
