@@ -1024,7 +1024,17 @@ namespace platf {
       free_proc_thread_attr_list(list);
     });
 
-    DWORD creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB;
+    DWORD creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+
+    // sunshinesvc's job allows the breakaway. A job that does not, such as Task Scheduler's for a
+    // Sunshine started by a logon task, fails every launch asking for it with ERROR_ACCESS_DENIED.
+    BOOL in_job = FALSE;
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_limits {};
+    if (!IsProcessInJob(GetCurrentProcess(), nullptr, &in_job) || !in_job ||
+        (QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &job_limits, sizeof(job_limits), nullptr) &&
+         (job_limits.BasicLimitInformation.LimitFlags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)))) {
+      creation_flags |= CREATE_BREAKAWAY_FROM_JOB;
+    }
 
     // Create a new console for interactive processes and use no console for non-interactive processes
     creation_flags |= interactive ? CREATE_NEW_CONSOLE : CREATE_NO_WINDOW;
