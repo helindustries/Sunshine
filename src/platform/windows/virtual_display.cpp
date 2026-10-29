@@ -20,6 +20,7 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/platform/windows/misc.h"
 #include "src/platform/windows/utf_utils.h"
 #include "third-party/sudovda/sudovda.h"
 
@@ -106,6 +107,41 @@ namespace platf {
     }
 
     /**
+     * @brief Make a display the primary one, keeping the arrangement of the others around it.
+     * @details The primary display is the one at 0,0, so every attached display moves by the new
+     *          primary's offset; the changes are staged and applied together.
+     */
+    void make_primary(const wchar_t *device_name) {
+      DEVMODEW mode {};
+      mode.dmSize = sizeof(mode);
+      if (EnumDisplaySettingsW(device_name, ENUM_CURRENT_SETTINGS, &mode)) {
+        const auto offset = mode.dmPosition;
+        DISPLAY_DEVICEW device {};
+        device.cb = sizeof(device);
+        for (DWORD index = 0; EnumDisplayDevicesW(nullptr, index, &device, 0); ++index) {
+          if ((device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) && wcscmp(device.DeviceName, device_name) != 0) {
+            DEVMODEW other {};
+            other.dmSize = sizeof(other);
+            if (EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS, &other)) {
+              other.dmPosition.x -= offset.x;
+              other.dmPosition.y -= offset.y;
+              other.dmFields = DM_POSITION;
+              ChangeDisplaySettingsExW(device.DeviceName, &other, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+            }
+          }
+          device.cb = sizeof(device);
+        }
+        mode.dmPosition = {0, 0};
+        mode.dmFields = DM_POSITION;
+        const auto staged = ChangeDisplaySettingsExW(device_name, &mode, nullptr, CDS_SET_PRIMARY | CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+        const auto applied = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
+        if (staged != DISP_CHANGE_SUCCESSFUL || applied != DISP_CHANGE_SUCCESSFUL) {
+          BOOST_LOG(warning) << "SudoVDA: couldn't make the new display primary ("sv << staged << ", "sv << applied << ')';
+        }
+      }
+    }
+
+    /**
      * @brief Open the driver once and keep its watchdog fed; SudoVDA removes its displays when it is not pinged.
      * @return Whether the driver is open.
      */
@@ -179,6 +215,12 @@ namespace platf {
             for (const auto &[name, display] : sudovda_displays) {
               set_display_mode(utf_utils::from_utf8(name).c_str(), display.width, display.height, display.fps);
             }
+          }
+          // Windows draws the sign-in and lock screens on the primary display only, so a client
+          // connecting there would see an empty desktop
+          if (platf::console_awaits_sign_in()) {
+            BOOST_LOG(info) << "SudoVDA: the console awaits sign-in, making the new display primary"sv;
+            make_primary(device_name);
           }
           output_name = utf_utils::to_utf8(device_name);
           sudovda_displays.emplace(output_name, sudovda_display_t {slot, width, height, fps});

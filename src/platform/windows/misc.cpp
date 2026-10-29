@@ -309,9 +309,6 @@ namespace platf {
     return ret;
   }
 
-  /**
-   * @brief Whether a user is logged on at the console, as opposed to the sign-in screen.
-   */
   bool console_user_logged_on() {
     auto logged_on = false;
     HANDLE token = nullptr;
@@ -320,6 +317,17 @@ namespace platf {
       logged_on = true;
     }
     return logged_on;
+  }
+
+  bool console_awaits_sign_in() {
+    auto awaits = !console_user_logged_on();
+    WTSINFOEXW *info = nullptr;
+    DWORD size = 0;
+    if (!awaits && WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTSGetActiveConsoleSessionId(), WTSSessionInfoEx, reinterpret_cast<LPWSTR *>(&info), &size) && info) {
+      awaits = info->Level == 1 && info->Data.WTSInfoExLevel1.SessionFlags == WTS_SESSIONSTATE_LOCK;
+      WTSFreeMemory(info);
+    }
+    return awaits;
   }
 
   /**

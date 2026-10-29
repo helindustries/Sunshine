@@ -16,6 +16,17 @@
 
 namespace platf {
   /**
+   * @brief Whether a user is logged on at the console, as opposed to the sign-in screen.
+   */
+  bool console_user_logged_on();
+
+  /**
+   * @brief Whether the console shows the sign-in or the lock screen, which Windows draws on the
+   *        primary display only.
+   */
+  bool console_awaits_sign_in();
+
+  /**
    * @brief Write status details to the log.
    *
    * @param prefix Text prefix used when formatting the message.
