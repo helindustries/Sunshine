@@ -138,6 +138,18 @@ namespace logging {
   void log_flush();
 
   /**
+   * @brief Record that the process terminates, and drain the asynchronous sink.
+   */
+  void log_terminate();
+
+  /**
+   * @brief The std::terminate handler init() installs: log_terminate(), then the previous one.
+   * @details A driver throwing through its own frames (Intel's QuickSync teardown on Windows)
+   *          ends in std::terminate, which would drop what the sink still queues.
+   */
+  [[noreturn]] void terminate_handler();
+
+  /**
    * @brief Print help to stdout.
    * @param name The name of the program.
    * @examples

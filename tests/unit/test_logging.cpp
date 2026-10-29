@@ -8,6 +8,7 @@
 #include "../tests_log_checker.h"
 
 // standard includes
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -177,4 +178,14 @@ TEST_P(LogLevelsTest, PutMessage) {
   BOOST_LOG(logger) << test_message;
 
   ASSERT_TRUE(log_checker::line_contains(log_file, test_message));
+}
+
+TEST(LoggingTerminateTest, InitInstallsTheTerminateHandler) {
+  EXPECT_EQ(std::get_terminate(), &logging::terminate_handler);
+}
+
+TEST(LoggingTerminateTest, TerminateRecordIsOnDiskWhenLogTerminateReturns) {
+  logging::log_terminate();
+
+  EXPECT_TRUE(log_checker::line_contains(log_file, "Terminating: an exception escaped where none may be thrown"));
 }

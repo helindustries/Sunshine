@@ -4,9 +4,12 @@
  */
 // standard includes
 #include <array>
+#include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <utility>
 
 // lib includes
@@ -38,6 +41,7 @@ using namespace std::literals;
 namespace bl = boost::log;
 
 boost::shared_ptr<boost::log::sinks::asynchronous_sink<boost::log::sinks::text_ostream_backend>> sink;  ///< Sink.
+std::terminate_handler previous_terminate = nullptr;  ///< The handler std::set_terminate replaced.
 
 bl::sources::severity_logger<int> verbose {0};  ///< Dominating output.
 bl::sources::severity_logger<int> debug {1};  ///< Follow what is happening.
@@ -190,6 +194,11 @@ namespace logging {
 
     bl::core::get()->add_sink(sink);
 
+    static std::once_flag terminate_installed;
+    std::call_once(terminate_installed, []() {
+      previous_terminate = std::set_terminate(&terminate_handler);
+    });
+
 #ifdef __ANDROID__
     auto android_sink = boost::make_shared<sinks::synchronous_sink<android_sink_backend>>();
     bl::core::get()->add_sink(android_sink);
@@ -261,6 +270,19 @@ namespace logging {
     if (sink) {
       sink->flush();
     }
+  }
+
+  void log_terminate() {
+    BOOST_LOG(fatal) << "Terminating: an exception escaped where none may be thrown"sv;
+    log_flush();
+  }
+
+  void terminate_handler() {
+    log_terminate();
+    if (previous_terminate) {
+      previous_terminate();
+    }
+    std::abort();
   }
 
   void print_help(const char *name) {
