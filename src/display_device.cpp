@@ -974,6 +974,7 @@ namespace display_device {
      */
     struct virtual_screen_t {
       std::string client_id;  ///< Paired client certificate, or the unique id of an unpaired client.
+      std::string profile_id;  ///< Client's stream profile, empty for clients that send none.
       std::string output_name;  ///< Output name the session captures.
       int width;  ///< Width in pixels.
       int height;  ///< Height in pixels.
@@ -998,16 +999,17 @@ namespace display_device {
       const auto height {session.height * session.scale_factor / 100 & ~1};
       const auto fps {session.fps};
       const auto client_id {client_id_for(session)};
+      const auto owned_and_free = [&](const auto &screen) {
+        return !screen.in_use && screen.client_id == client_id && screen.profile_id == session.profile_id;
+      };
       std::unique_lock lock {virtual_screens_mutex};
 
-      // Of the client's free displays, prefer one that already has the requested mode
+      // Of the profile's free displays, prefer one that already has the requested mode
       auto free_screen = std::ranges::find_if(virtual_screens, [&](const auto &screen) {
-        return !screen.in_use && screen.client_id == client_id && screen.width == width && screen.height == height && screen.fps == fps;
+        return owned_and_free(screen) && screen.width == width && screen.height == height && screen.fps == fps;
       });
       if (free_screen == virtual_screens.end()) {
-        free_screen = std::ranges::find_if(virtual_screens, [&](const auto &screen) {
-          return !screen.in_use && screen.client_id == client_id;
-        });
+        free_screen = std::ranges::find_if(virtual_screens, owned_and_free);
       }
 
       if (free_screen != virtual_screens.end() && free_screen->width == width && free_screen->height == height && free_screen->fps == fps) {
@@ -1023,7 +1025,7 @@ namespace display_device {
 
         output_name = platf::virtual_display_create(width, height, fps);
         if (!output_name.empty()) {
-          virtual_screens.push_back({client_id, output_name, width, height, fps, true});
+          virtual_screens.push_back({client_id, session.profile_id, output_name, width, height, fps, true});
           BOOST_LOG(info) << "Created virtual display "sv << output_name << " ("sv << width << 'x' << height << '@' << fps << "Hz, "sv << virtual_screens.size() << " in total)"sv;
           lock.unlock();
           // Give the window server time to register the display before capture
@@ -1041,6 +1043,17 @@ namespace display_device {
     if (auto screen = std::ranges::find(virtual_screens, output_name, &virtual_screen_t::output_name); screen != virtual_screens.end()) {
       screen->in_use = false;
     }
+  }
+
+  std::vector<std::string> virtual_display_profiles(const std::string &client_cert) {
+    std::vector<std::string> profiles;
+    std::lock_guard lock {virtual_screens_mutex};
+    for (const auto &screen : virtual_screens) {
+      if (screen.client_id == client_cert && !screen.profile_id.empty() && std::ranges::find(profiles, screen.profile_id) == profiles.end()) {
+        profiles.push_back(screen.profile_id);
+      }
+    }
+    return profiles;
   }
 
   void destroy_virtual_displays() {

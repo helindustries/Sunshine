@@ -534,6 +534,7 @@ namespace nvhttp {
     launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
+    launch_session->profile_id = get_arg(args, "profileId", "");
     launch_session->virtual_display_requested = util::from_view(get_arg(args, "virtualDisplay", "0"));
     launch_session->scale_factor = std::clamp((int) util::from_view(get_arg(args, "scaleFactor", "100")), 20, 400);
 
@@ -1324,6 +1325,12 @@ namespace nvhttp {
         for (const auto &server_cmd : config::sunshine.server_cmds) {
           tree.add("root.ServerCommand", server_cmd.name);
         }
+      }
+
+      // Present even when empty: Artemis then marks only these profiles as running, not every one
+      tree.put("root.VirtualDisplayProfiles", "");
+      for (const auto &profile_id : display_device::virtual_display_profiles(last_verified_client_cert)) {
+        tree.add("root.VirtualDisplayProfiles.VirtualDisplayProfile", profile_id);
       }
     } else {
       tree.put("root.Permission", "0");

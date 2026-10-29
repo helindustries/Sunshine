@@ -99,6 +99,7 @@ namespace rtsp_stream {
     std::string rtsp_url_scheme;  ///< URL scheme selected by the RTSP SETUP flow.
     uint32_t rtsp_iv_counter;  ///< Counter value mixed into encrypted RTSP IVs.
     std::string client_cert;  ///< PEM certificate for the paired Moonlight client.
+    std::string profile_id;  ///< Artemis stream profile (profileId); its virtual display is only reused for the same profile.
     std::string output_name;  ///< Virtual display acquired for this launch; empty captures the configured display.
     bool virtual_display_requested {};  ///< Client asked for a virtual display (Apollo's virtualDisplay=1), whatever the config says.
     int scale_factor {100};  ///< Virtual display size in percent of the stream size (Apollo's scaleFactor).

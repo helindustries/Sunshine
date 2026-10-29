@@ -120,9 +120,10 @@ namespace display_device {
 
   /**
    * @brief Give a launching session its own virtual display at the size the client asked for.
-   * @details A client whose earlier session has ended gets that session's display back, recreated
-   *          if the size or refresh rate changed. A client whose sessions are all still running
-   *          gets an additional display.
+   * @details A client whose earlier session of the same stream profile has ended gets that
+   *          session's display back, recreated if the size or refresh rate changed. A client
+   *          whose sessions of that profile are all still running gets an additional display.
+   *          Clients that send no profile share one unnamed profile.
    * @param video_config User's video related configuration.
    * @param session Session information containing the client identity, width, height, and fps.
    * @return Output name the session captures, empty when virtual displays are disabled or failed.
@@ -135,6 +136,13 @@ namespace display_device {
    * @param output_name Output name returned by acquire_virtual_display().
    */
   void release_virtual_display(const std::string &output_name);
+
+  /**
+   * @brief The stream profiles a client has a virtual display for, streaming or free to resume.
+   * @param client_cert PEM certificate of the client.
+   * @return Profile ids, without the unnamed profile, each once.
+   */
+  std::vector<std::string> virtual_display_profiles(const std::string &client_cert);
 
   /**
    * @brief Destroy every virtual display, used once the last session has stopped.
