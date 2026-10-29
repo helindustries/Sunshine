@@ -310,6 +310,19 @@ namespace platf {
   }
 
   /**
+   * @brief Whether a user is logged on at the console, as opposed to the sign-in screen.
+   */
+  bool console_user_logged_on() {
+    auto logged_on = false;
+    HANDLE token = nullptr;
+    if (const auto session = WTSGetActiveConsoleSessionId(); session != 0xFFFFFFFF && WTSQueryUserToken(session, &token)) {
+      CloseHandle(token);
+      logged_on = true;
+    }
+    return logged_on;
+  }
+
+  /**
    * @brief Obtain the current sessions user's primary token with elevated privileges.
    * @return The user's token. If user has admin capability it will be elevated, otherwise it will be a limited token. On error, `nullptr`.
    *
@@ -1066,7 +1079,10 @@ namespace platf {
     });
 
     BOOL ret;
-    if (is_running_as_system()) {
+    // At the sign-in screen nobody is logged on, so there is no user token to run a command with.
+    // An elevated command then runs as Sunshine's own SYSTEM account, as Apollo's did, so a stream
+    // can reach the sign-in screen; every other command still fails without a user
+    if (is_running_as_system() && !(elevated && !console_user_logged_on())) {
       // Duplicate the current user's token
       HANDLE user_token = retrieve_users_token(elevated);
       if (!user_token) {
