@@ -369,6 +369,28 @@ TEST_F(InputGamepadSessionTest, SerializesArrivalAndStatePacketsForOneController
   EXPECT_EQ(adapter->gamepad()->profile().gamepad_kind, lvh::GamepadProfileKind::switch_pro);
 }
 
+TEST_F(InputGamepadSessionTest, SimultaneousStreamsOfOneClientKeepSeparateInput) {
+  const std::string client {"stream-identity-client"};
+  auto first = input::alloc(std::make_shared<safe::mail_raw_t>(), client + "#window:1", 1);
+  auto second = input::alloc(std::make_shared<safe::mail_raw_t>(), client + "#window:2", 2);
+  auto first_resumed = input::alloc(std::make_shared<safe::mail_raw_t>(), client + "#window:1", 1);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_NE(first, second);
+  EXPECT_EQ(first, first_resumed);
+
+  // Ending the client's sessions releases every one of its streams, and nobody else's, not even
+  // those of a client whose id it starts
+  const auto other {client + "-b"};
+  auto other_client = input::alloc(std::make_shared<safe::mail_raw_t>(), other + "#window:1", 1);
+  input::terminate_gamepads(client);
+  EXPECT_NE(input::alloc(std::make_shared<safe::mail_raw_t>(), client + "#window:1", 1), first);
+  EXPECT_NE(input::alloc(std::make_shared<safe::mail_raw_t>(), client + "#window:2", 2), second);
+  EXPECT_EQ(input::alloc(std::make_shared<safe::mail_raw_t>(), other + "#window:1", 1), other_client);
+  input::terminate_gamepads(client);
+  input::terminate_gamepads(other);
+}
+
 TEST_F(InputGamepadSessionTest, YieldsAfterBoundedPacketBatch) {
   ASSERT_FALSE(task_pool.running());
   auto stream_input = input::alloc(std::make_shared<safe::mail_raw_t>(), "bounded-input-batch");

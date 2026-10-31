@@ -2362,23 +2362,25 @@ namespace input {
     }
   }
 
-  void terminate_gamepads(const std::string_view session_id) {
-    std::shared_ptr<input_t> input;
+  void terminate_gamepads(const std::string_view client_id) {
+    retained_input_map_t inputs;
     {
       auto &state = retained_input_state();
       std::lock_guard lock {state.mutex};
-      const auto iter = state.inputs.find(session_id);
-      if (iter == state.inputs.end()) {
-        return;
+      for (auto iter = state.inputs.begin(); iter != state.inputs.end();) {
+        if (const std::string_view key {iter->first}; key.starts_with(client_id) && (key.size() == client_id.size() || key[client_id.size()] == '#')) {
+          inputs.insert(state.inputs.extract(iter++));
+        } else {
+          ++iter;
+        }
       }
-
-      input = std::move(iter->second);
-      state.inputs.erase(iter);
     }
 
-    dispatch_input_task([input = std::move(input)]() {
-      destroy_gamepads(input);
-    });
+    if (!inputs.empty()) {
+      dispatch_input_task([inputs = std::move(inputs)]() {
+        destroy_gamepads(inputs);
+      });
+    }
   }
 
   /**

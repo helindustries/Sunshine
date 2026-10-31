@@ -42,11 +42,11 @@ namespace input {
   void terminate_gamepads();
 
   /**
-   * @brief Destroy virtual gamepads retained for one paired client.
+   * @brief Destroy virtual gamepads retained for one paired client, in all of its streams.
    *
-   * @param session_id Stable paired-client identity used by alloc().
+   * @param client_id Paired-client identity the session ids given to alloc() start with.
    */
-  void terminate_gamepads(std::string_view session_id);
+  void terminate_gamepads(std::string_view client_id);
 
   /**
    * @brief Queue a raw input message for platform passthrough.

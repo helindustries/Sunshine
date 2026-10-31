@@ -568,7 +568,7 @@ namespace stream {
 
     std::uint32_t launch_session_id;  ///< RTSP launch-session ID associated with this stream.
     std::string client_cert;  ///< PEM certificate for the paired client owning the stream.
-    std::string input_session_id;  ///< Stable client identity used to retain input devices across resume.
+    std::string input_session_id;  ///< Client identity and output name, used to retain the stream's input devices across resume.
 
     safe::mail_raw_t::event_t<bool> shutdown_event;  ///< Event raised when the stream should shut down.
     safe::signal_t controlEnd;  ///< Signal raised when the control channel exits.
@@ -2362,7 +2362,9 @@ namespace stream {
       session->shutdown_event = mail->event<bool>(mail::shutdown);
       session->launch_session_id = launch_session.id;
       session->client_cert = launch_session.client_cert;
-      session->input_session_id = launch_session.client_cert.empty() ? launch_session.unique_id : launch_session.client_cert;
+      // Simultaneous streams of one client need separate input: shared, each new stream's touch
+      // port would map absolute mouse input of all of them to its own screen
+      session->input_session_id = (launch_session.client_cert.empty() ? launch_session.unique_id : launch_session.client_cert) + '#' + launch_session.output_name;
 
       session->config = config;
       session->config.monitor.output_name = launch_session.output_name;
