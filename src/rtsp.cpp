@@ -14,9 +14,7 @@ extern "C" {
 #include <array>
 #include <cctype>
 #include <format>
-#include <mutex>
 #include <set>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -103,9 +101,11 @@ namespace rtsp_stream {
      *
      * @param io_context Io context.
      * @param handle_data_fn Handle data.
+     * @param pending_launches_fn Launches still waiting for their client's RTSP handshake.
      */
-    socket_t(boost::asio::io_context &io_context, std::function<void(tcp::socket &sock, launch_session_t &, msg_t &&)> &&handle_data_fn):
+    socket_t(boost::asio::io_context &io_context, std::function<void(tcp::socket &sock, launch_session_t &, msg_t &&)> &&handle_data_fn, std::function<std::vector<std::shared_ptr<launch_session_t>>()> &&pending_launches_fn):
         handle_data_fn {std::move(handle_data_fn)},
+        pending_launches_fn {std::move(pending_launches_fn)},
         sock {io_context} {
     }
 
@@ -231,8 +231,19 @@ namespace rtsp_stream {
       iv[10] = 'C';  // Client originated
       iv[11] = 'R';  // RTSP
 
+      // An RTSP connection carries no launch id, and several launches of one client can wait for
+      // their handshakes at once (a stream per screen or window): the launch whose key verifies
+      // the message is the one the connection belongs to
+      const std::string_view tagged_cipher {(const char *) header->tag.data(), sizeof(header->tag) + bytes};
       std::vector<uint8_t> plaintext;
-      if (socket->session->rtsp_cipher->decrypt(std::string_view {(const char *) header->tag.data(), sizeof(header->tag) + bytes}, plaintext, &iv)) {
+      auto verified = socket->session->rtsp_cipher->decrypt(tagged_cipher, plaintext, &iv) == 0;
+      for (const auto &candidate : socket->pending_launches_fn()) {
+        if (!verified && candidate != socket->session && candidate->rtsp_cipher && candidate->rtsp_cipher->decrypt(tagged_cipher, plaintext, &iv) == 0) {
+          socket->session = candidate;
+          verified = true;
+        }
+      }
+      if (!verified) {
         BOOST_LOG(error) << "Failed to verify RTSP message tag"sv;
 
         respond(socket->sock, *socket->session, nullptr, 400, "BAD REQUEST", 0, {});
@@ -408,6 +419,7 @@ namespace rtsp_stream {
     }
 
     std::function<void(tcp::socket &sock, launch_session_t &, msg_t &&)> handle_data_fn;  ///< Command dispatcher installed by the RTSP server.
+    std::function<std::vector<std::shared_ptr<launch_session_t>>()> pending_launches_fn;  ///< Launches a message may belong to.
 
     tcp::socket sock;  ///< TCP socket connected to the RTSP client.
 
@@ -462,15 +474,28 @@ namespace rtsp_stream {
         return -1;
       }
 
-      next_socket = std::make_shared<socket_t>(io_context, [this](tcp::socket &sock, launch_session_t &session, msg_t &&msg) {
-        handle_msg(sock, session, std::move(msg));
-      });
-
+      next_socket = make_socket();
       acceptor.async_accept(next_socket->sock, [this](const auto &ec) {
         handle_accept(ec);
       });
 
       return 0;
+    }
+
+    /**
+     * @brief A socket for the next incoming RTSP connection.
+     * @return The socket, wired to this server's handlers and pending launches.
+     */
+    std::shared_ptr<socket_t> make_socket() {
+      return std::make_shared<socket_t>(
+        io_context,
+        [this](tcp::socket &sock, launch_session_t &session, msg_t &&msg) {
+          handle_msg(sock, session, std::move(msg));
+        },
+        [this]() {
+          return pending_launches();
+        }
+      );
     }
 
     /**
@@ -507,10 +532,10 @@ namespace rtsp_stream {
 
       auto socket = std::move(next_socket);
 
-      auto launch_session {launch_event.view(0s)};
-      if (launch_session) {
-        // Associate the current RTSP session with this socket and start reading
-        socket->session = launch_session;
+      // The oldest launch first; an encrypted message moves the socket to the launch whose key
+      // verifies it (handle_read_encrypted_message)
+      if (const auto pending = pending_launches(); !pending.empty()) {
+        socket->session = pending.front();
         socket->read();
       } else {
         // This can happen due to normal things like port scanning, so let's not make these visible by default
@@ -522,9 +547,7 @@ namespace rtsp_stream {
       }
 
       // Queue another asynchronous accept for the next incoming connection
-      next_socket = std::make_shared<socket_t>(io_context, [this](tcp::socket &sock, launch_session_t &session, msg_t &&msg) {
-        handle_msg(sock, session, std::move(msg));
-      });
+      next_socket = make_socket();
       acceptor.async_accept(next_socket->sock, [this](const auto &ec) {
         handle_accept(ec);
       });
@@ -547,43 +570,60 @@ namespace rtsp_stream {
      * @param launch_session Streaming session information.
      */
     void session_raise(std::shared_ptr<launch_session_t> launch_session) {
-      // If a launch event is still pending, don't overwrite it.
-      if (launch_event.view(0s)) {
-        return;
-      }
-
-      // Raise the new launch session to prepare for the RTSP handshake
-      launch_event.raise(std::move(launch_session));
-
-      // Arm the timer to expire this launch session if the client times out
-      raised_timer.expires_after(config::stream.ping_timeout);
-      raised_timer.async_wait([this](const boost::system::error_code &ec) {
+      auto expiry = std::make_shared<boost::asio::steady_timer>(io_context, config::stream.ping_timeout);
+      expiry->async_wait([this, launch_session_id = launch_session->id](const boost::system::error_code &ec) {
         if (!ec) {
-          auto discarded = launch_event.pop(0s);
-          if (discarded) {
+          if (const auto discarded = take_pending(launch_session_id)) {
             BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
             display_device::release_virtual_display(discarded->output_name);
           }
         }
       });
+
+      auto lg = _pending_launches.lock();
+      _pending_launches->push_back({std::move(launch_session), std::move(expiry)});
     }
 
     /**
-     * @brief Clear state for the oldest launch session.
+     * @brief Clear state for a launch session once its stream has started.
      * @param launch_session_id The ID of the session to clear.
      */
     void session_clear(uint32_t launch_session_id) {
-      // We currently only support a single pending RTSP session,
-      // so the ID should always match the one for that session.
-      auto launch_session = launch_event.view(0s);
-      if (launch_session) {
-        if (launch_session->id != launch_session_id) {
-          BOOST_LOG(error) << "Attempted to clear unexpected session: "sv << launch_session_id << " vs "sv << launch_session->id;
-        } else {
-          raised_timer.cancel();
-          launch_event.pop();
-        }
+      if (!take_pending(launch_session_id)) {
+        BOOST_LOG(debug) << "Launch session "sv << launch_session_id << " was no longer pending"sv;
       }
+    }
+
+    /**
+     * @brief The launches still waiting for their client's RTSP handshake, oldest first.
+     * @return The launch sessions.
+     */
+    std::vector<std::shared_ptr<launch_session_t>> pending_launches() {
+      std::vector<std::shared_ptr<launch_session_t>> sessions;
+      auto lg = _pending_launches.lock();
+      for (const auto &pending : *_pending_launches) {
+        sessions.push_back(pending.session);
+      }
+      return sessions;
+    }
+
+    /**
+     * @brief Remove a launch from the pending ones and stop its expiry.
+     * @param launch_session_id The ID of the launch.
+     * @return The launch, nullptr when it was not pending.
+     */
+    std::shared_ptr<launch_session_t> take_pending(uint32_t launch_session_id) {
+      std::shared_ptr<launch_session_t> taken;
+      auto lg = _pending_launches.lock();
+      if (auto pending = std::ranges::find_if(*_pending_launches, [launch_session_id](const auto &launch) {
+            return launch.session->id == launch_session_id;
+          });
+          pending != _pending_launches->end()) {
+        pending->expiry->cancel();
+        taken = std::move(pending->session);
+        _pending_launches->erase(pending);
+      }
+      return taken;
     }
 
     /**
@@ -607,7 +647,6 @@ namespace rtsp_stream {
       });
     }
 
-    safe::event_t<std::shared_ptr<launch_session_t>> launch_event;  ///< Launch event.
 
     /**
      * @brief Clear launch sessions.
@@ -697,9 +736,18 @@ namespace rtsp_stream {
 
     sync_util::sync_t<std::set<std::shared_ptr<stream::session_t>>> _session_slots;
 
+    /**
+     * @brief A launch waiting for its client's RTSP handshake, and the timer that drops it.
+     */
+    struct pending_launch_t {
+      std::shared_ptr<launch_session_t> session;  ///< The launch.
+      std::shared_ptr<boost::asio::steady_timer> expiry;  ///< Fires after ping_timeout without a stream.
+    };
+
+    sync_util::sync_t<std::vector<pending_launch_t>> _pending_launches;
+
     boost::asio::io_context io_context;
     tcp::acceptor acceptor {io_context};
-    boost::asio::steady_timer raised_timer {io_context};
 
     std::shared_ptr<socket_t> next_socket;
   };
@@ -710,22 +758,7 @@ namespace rtsp_stream {
    * @brief Queue a launch session until the RTSP client connects.
    */
   void launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
-    // RTSP connections carry no launch id and are bound to the one pending launch on arrival, so
-    // a second client's launch waits here until the first has started streaming or timed out
-    static std::mutex launch_mutex;
-    std::lock_guard lock {launch_mutex};
-
-    const auto deadline = std::chrono::steady_clock::now() + config::stream.ping_timeout;
-    while (server.launch_event.view(0s) && std::chrono::steady_clock::now() < deadline) {
-      std::this_thread::sleep_for(50ms);
-    }
-
-    if (server.launch_event.view(0s)) {
-      BOOST_LOG(warning) << "Dropping launch for "sv << launch_session->client_name << ": an earlier launch is still pending"sv;
-      display_device::release_virtual_display(launch_session->output_name);
-    } else {
-      server.session_raise(std::move(launch_session));
-    }
+    server.session_raise(std::move(launch_session));
   }
 
   void launch_session_clear(uint32_t launch_session_id) {
@@ -733,7 +766,7 @@ namespace rtsp_stream {
   }
 
   bool launch_pending() {
-    return static_cast<bool>(server.launch_event.view(0s));
+    return !server.pending_launches().empty();
   }
 
   bool client_streaming(const std::string &client_cert) {
