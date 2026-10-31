@@ -19,6 +19,9 @@
 #include <boost/algorithm/string/join.hpp>
 #include <MinHook.h>
 
+// platform includes needing Windows.h from MinHook
+#include <dwmapi.h>
+
 // local includes
 #include "utf_utils.h"
 
@@ -498,8 +501,19 @@ namespace platf::dxgi {
       return -1;
     }
 
+    // A window capture takes the output the window is on, at the window's bounds
+    HMONITOR window_monitor {};
+    if (const auto window_id {platf::host_window_id(display_name)}; window_id != 0) {
+      capture_window = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(window_id));
+      if (!IsWindow(capture_window) || FAILED(DwmGetWindowAttribute(capture_window, DWMWA_EXTENDED_FRAME_BOUNDS, &capture_window_bounds, sizeof(capture_window_bounds)))) {
+        BOOST_LOG(error) << "Expected window "sv << window_id << " to capture, but it is gone"sv;
+        return -1;
+      }
+      window_monitor = MonitorFromWindow(capture_window, MONITOR_DEFAULTTONEAREST);
+    }
+
     auto adapter_name = utf_utils::from_utf8(config::video.adapter_name);
-    auto output_name = utf_utils::from_utf8(display_name);
+    auto output_name = window_monitor ? std::wstring {} : utf_utils::from_utf8(display_name);
 
     adapter_t::pointer adapter_p;
     for (int tries = 0; tries < 2; ++tries) {
@@ -520,7 +534,7 @@ namespace platf::dxgi {
           DXGI_OUTPUT_DESC desc;
           output_tmp->GetDesc(&desc);
 
-          if (!output_name.empty() && desc.DeviceName != output_name) {
+          if ((!output_name.empty() && desc.DeviceName != output_name) || (window_monitor && desc.Monitor != window_monitor)) {
             continue;
           }
 
@@ -537,6 +551,17 @@ namespace platf::dxgi {
               width_before_rotation = height;
               height_before_rotation = width;
             } else {
+              width_before_rotation = width;
+              height_before_rotation = height;
+            }
+
+            // Window frames arrive unrotated, whatever the monitor's rotation
+            if (capture_window) {
+              offset_x = capture_window_bounds.left;
+              offset_y = capture_window_bounds.top;
+              width = capture_window_bounds.right - capture_window_bounds.left;
+              height = capture_window_bounds.bottom - capture_window_bounds.top;
+              display_rotation = DXGI_MODE_ROTATION_IDENTITY;
               width_before_rotation = width;
               height_before_rotation = height;
             }
@@ -1026,8 +1051,15 @@ namespace platf {
    * Pick a display adapter and capture method.
    * @param hwdevice_type enables possible use of hardware encoder
    */
+  bool dxgi::display_base_t::capture_window_moved() const {
+    RECT bounds {};
+    return capture_window && SUCCEEDED(DwmGetWindowAttribute(capture_window, DWMWA_EXTENDED_FRAME_BOUNDS, &bounds, sizeof(bounds))) && !EqualRect(&bounds, &capture_window_bounds);
+  }
+
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
-    if (config::video.capture == "ddx" || config::video.capture.empty()) {
+    // Desktop duplication captures whole outputs only
+    const auto window_capture {host_window_id(display_name) != 0};
+    if (!window_capture && (config::video.capture == "ddx" || config::video.capture.empty())) {
       if (hwdevice_type == mem_type_e::dxgi) {
         auto disp = std::make_shared<dxgi::display_ddup_vram_t>();
 
@@ -1043,7 +1075,7 @@ namespace platf {
       }
     }
 
-    if (config::video.capture == "wgc" || config::video.capture.empty()) {
+    if (window_capture || config::video.capture == "wgc" || config::video.capture.empty()) {
       if (hwdevice_type == mem_type_e::dxgi) {
         auto disp = std::make_shared<dxgi::display_wgc_vram_t>();
 

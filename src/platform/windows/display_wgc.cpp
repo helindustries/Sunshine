@@ -126,11 +126,25 @@ namespace platf::dxgi {
     uwp_device = d3d_comhandle.as<winrt::IDirect3DDevice>();
     display->output->GetDesc(&output_desc);
 
-    auto monitor_factory = winrt::get_activation_factory<winrt::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-    if (monitor_factory == nullptr || FAILED(status = monitor_factory->CreateForMonitor(output_desc.Monitor, winrt::guid_of<winrt::IGraphicsCaptureItem>(), winrt::put_abi(item)))) {
+    auto item_factory = winrt::get_activation_factory<winrt::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+    if (item_factory == nullptr) {
+      BOOST_LOG(error) << "Screen capture is not supported on this device for this release of Windows: no capture item factory"sv;
+      return -1;
+    }
+    if (display->capture_window) {
+      if (FAILED(status = item_factory->CreateForWindow(display->capture_window, winrt::guid_of<winrt::IGraphicsCaptureItem>(), winrt::put_abi(item)))) {
+        BOOST_LOG(error) << "Failed to acquire window "sv << display->capture_window << " for capture: [0x"sv << util::hex(status).to_string_view() << ']';
+        return -1;
+      }
+
+      // The item's size is what its frames hold; the window's bounds can differ by a pixel
+      display->width = display->width_before_rotation = item.Size().Width;
+      display->height = display->height_before_rotation = item.Size().Height;
+    } else if (FAILED(status = item_factory->CreateForMonitor(output_desc.Monitor, winrt::guid_of<winrt::IGraphicsCaptureItem>(), winrt::put_abi(item)))) {
       BOOST_LOG(error) << "Screen capture is not supported on this device for this release of Windows: failed to acquire display: [0x"sv << util::hex(status).to_string_view() << ']';
       return -1;
     }
+    pool_size = item.Size();
 
     if (config.dynamicRange) {
       display->capture_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -224,6 +238,12 @@ namespace platf::dxgi {
       return capture_e::timeout;
     }
 
+    // A resized window keeps arriving in surfaces of the pool's size, only its content size changes
+    if (const auto content_size {consumed_frame.ContentSize()}; content_size.Width != pool_size.Width || content_size.Height != pool_size.Height) {
+      BOOST_LOG(info) << "Captured content resized ["sv << pool_size.Width << 'x' << pool_size.Height << " -> "sv << content_size.Width << 'x' << content_size.Height << ']';
+      return capture_e::reinit;
+    }
+
     auto capture_access = consumed_frame.Surface().as<winrt::IDirect3DDxgiInterfaceAccess>();
     if (capture_access == nullptr) {
       return capture_e::capture_error;
@@ -268,10 +288,14 @@ namespace platf::dxgi {
     HRESULT status;
     texture2d_t src;
     uint64_t frame_qpc;
-    dup.set_cursor_visible(cursor_visible);
+    // In a window stream the client's own pointer is the pointer
+    dup.set_cursor_visible(cursor_visible && !capture_window);
     auto capture_status = dup.next_frame(timeout, &src, frame_qpc);
     if (capture_status != capture_e::ok) {
       return capture_status;
+    }
+    if (capture_window_moved()) {
+      return capture_e::reinit;
     }
 
     auto frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), frame_qpc);

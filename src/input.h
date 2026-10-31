@@ -79,10 +79,12 @@ namespace input {
    * @brief Allocate and initialize platform input state for a stream.
    *
    * @param mail Mailbox used to exchange messages with worker threads.
-   * @param session_id Stable paired-client identity shared by launch and resume connections.
+   * @param session_id Paired-client identity followed by the stream's output name, shared by the
+   *                   launch and resume connections of that stream; simultaneous streams differ.
+   * @param window_id Host window the stream drives (coherence mode), raised on input; 0 for none.
    * @return Shared input state bound to the stream mailbox.
    */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id);
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, std::uint64_t window_id = 0);
 
 #ifdef SUNSHINE_TESTS
   namespace testing {

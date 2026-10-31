@@ -1353,6 +1353,90 @@ namespace platf {
    */
   bool set_clipboard(const std::string &content);
 
+  /**
+   * @brief A host window a client can stream on its own (coherence mode).
+   */
+  struct host_window_t {
+    std::uint64_t id;  ///< Platform window handle; streams name it host_window_prefix + id.
+    std::string title;  ///< Window title, UTF-8.
+    std::string process;  ///< File name of the owning process's executable.
+    int x;  ///< Left edge on the host desktop, in pixels, so a client can follow moves.
+    int y;  ///< Top edge on the host desktop, in pixels.
+    int width;  ///< Width in pixels, as captured.
+    int height;  ///< Height in pixels, as captured.
+    bool minimized;  ///< Minimized: listed so its client window minimizes too, but not capturable.
+  };
+
+  constexpr std::string_view host_window_prefix {"window:"};  ///< Output name prefix of a window capture.
+
+  /**
+   * @brief The window an output name captures.
+   * @param output_name A session's output name.
+   * @return The window id, 0 when the name is not host_window_prefix followed by an id.
+   */
+  inline std::uint64_t host_window_id(std::string_view output_name) {
+    std::uint64_t id {};
+    if (output_name.starts_with(host_window_prefix)) {
+      const auto digits {output_name.substr(host_window_prefix.size())};
+      if (const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), id); error != std::errc {} || end != digits.data() + digits.size()) {
+        id = 0;
+      }
+    }
+    return id;
+  }
+
+  /**
+   * @brief The windows of the host desktop a user works with: visible or minimized, titled,
+   *        no tool windows or shell surfaces.
+   * @return The windows in front-to-back order, empty where the platform cannot capture windows.
+   */
+  std::vector<host_window_t> host_windows();
+
+  /**
+   * @brief Bring a host window to the front, restoring it when minimized, so input injected next
+   *        lands in it.
+   * @param id Window id from host_windows().
+   */
+  void raise_host_window(std::uint64_t id);
+
+  /**
+   * @brief Resize a host window, as its client window was resized.
+   * @param id Window id from host_windows().
+   * @param width Width as captured, in pixels.
+   * @param height Height as captured, in pixels.
+   * @return Whether the window took the size.
+   */
+  bool resize_host_window(std::uint64_t id, int width, int height);
+
+  /**
+   * @brief An app the host's user pinned, which a client can start in coherence mode.
+   */
+  struct host_app_t {
+    std::string id;  ///< Stable on the host: the pinned shortcut's file name.
+    std::string name;  ///< Name to show.
+  };
+
+  /**
+   * @brief The apps the console user pinned to the taskbar.
+   * @return The apps, empty where the platform has none or nobody is logged on.
+   */
+  std::vector<host_app_t> pinned_host_apps();
+
+  /**
+   * @brief A pinned app's icon.
+   * @param id Id from pinned_host_apps().
+   * @return PNG data, empty when the app or its icon is not found.
+   */
+  std::string pinned_host_app_icon(const std::string &id);
+
+  /**
+   * @brief Start a pinned app in the console user's session. Only pinned apps can be started,
+   *        so a client never names a command.
+   * @param id Id from pinned_host_apps().
+   * @return Whether the app was started.
+   */
+  bool launch_pinned_host_app(const std::string &id);
+
   constexpr auto SERVICE_NAME = "Sunshine";  ///< mDNS service instance name advertised for GameStream discovery.
   constexpr auto SERVICE_TYPE = "_nvstream._tcp";  ///< mDNS service type advertised for GameStream discovery.
 

@@ -27,6 +27,17 @@ TEST(HostnameTests, TestAsioEquality) {
   ASSERT_EQ(platf::get_host_name(), boost::asio::ip::host_name());
 }
 
+TEST(HostWindowIdTest, ParsesOnlyAWholeWindowOutputName) {
+  EXPECT_EQ(platf::host_window_id("window:4198492"), 4198492u);
+  EXPECT_EQ(platf::host_window_id("window:18446744073709551615"), 18446744073709551615u);
+  EXPECT_EQ(platf::host_window_id(""), 0u);
+  EXPECT_EQ(platf::host_window_id("\\\\.\\DISPLAY16"), 0u);
+  EXPECT_EQ(platf::host_window_id("window:"), 0u);
+  EXPECT_EQ(platf::host_window_id("window:12ab"), 0u);
+  EXPECT_EQ(platf::host_window_id("window:-5"), 0u);
+  EXPECT_EQ(platf::host_window_id("kwin:window:5"), 0u);
+}
+
 TEST(SocketAddressTest, FormatsConstIpv4AndIpv6AddressesAndPreservesNetworkOrderPorts) {
   for (const auto *text : {"192.0.2.17", "2001:db8::17"}) {
     const boost::asio::ip::udp::endpoint endpoint {boost::asio::ip::make_address(text), 4321};

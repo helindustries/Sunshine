@@ -668,6 +668,30 @@ namespace platf {
     return false;
   }
 
+  // Window capture on Linux is its own step of coherence mode; until then there are none to offer
+  std::vector<host_window_t> host_windows() {
+    return {};
+  }
+
+  void raise_host_window(std::uint64_t /*id*/) {
+  }
+
+  bool resize_host_window(std::uint64_t /*id*/, int /*width*/, int /*height*/) {
+    return false;
+  }
+
+  std::vector<host_app_t> pinned_host_apps() {
+    return {};
+  }
+
+  std::string pinned_host_app_icon(const std::string & /*id*/) {
+    return {};
+  }
+
+  bool launch_pinned_host_app(const std::string & /*id*/) {
+    return false;
+  }
+
   /**
    * @brief Request a Sunshine process restart on exit.
    */

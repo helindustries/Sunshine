@@ -27,6 +27,18 @@ namespace platf {
   bool console_awaits_sign_in();
 
   /**
+   * @brief The console user's token, elevated if requested and the user is an admin.
+   * @param elevated Whether the token should carry the user's admin rights.
+   * @return The token, which the caller closes; nullptr when nobody is logged on.
+   */
+  HANDLE retrieve_users_token(bool elevated);
+
+  /**
+   * @brief Whether this process runs as SYSTEM (the service), not as the user (a dev run).
+   */
+  bool is_running_as_system();
+
+  /**
    * @brief Write status details to the log.
    *
    * @param prefix Text prefix used when formatting the message.

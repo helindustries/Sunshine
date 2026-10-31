@@ -2310,7 +2310,7 @@ namespace stream {
      * @brief Start the audio, video, and control workers for a streaming session.
      */
     int start(session_t &session, const std::string &addr_string) {
-      session.input = input::alloc(session.mail, session.input_session_id);
+      session.input = input::alloc(session.mail, session.input_session_id, platf::host_window_id(session.config.monitor.output_name));
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {

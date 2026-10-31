@@ -326,6 +326,8 @@ namespace input {
 
     int32_t accumulated_vscroll_delta {};  ///< Accumulated vscroll delta.
     int32_t accumulated_hscroll_delta {};  ///< Accumulated hscroll delta.
+
+    std::uint64_t window_id {};  ///< Host window this stream drives (coherence mode), raised on presses; 0 for none.
   };
 
   /**
@@ -924,6 +926,9 @@ namespace input {
 
     auto release = util::endian::little(packet->header.magic) == MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5;
     auto button = util::endian::big(packet->button);
+    if (!release && input->window_id != 0) {
+      platf::raise_host_window(input->window_id);
+    }
     if (button > 0 && button < mouse_press.size()) {
       if (mouse_press[button] != release) {
         // button state is already what we want
@@ -1197,6 +1202,9 @@ namespace input {
 
     auto release = util::endian::little(packet->header.magic) == KEY_UP_EVENT_MAGIC;
     auto keyCode = packet->keyCode & 0x00FF;
+    if (!release && input->window_id != 0) {
+      platf::raise_host_window(input->window_id);
+    }
 
     update_modifier_state(*input, keyCode, release);
 
@@ -2429,7 +2437,7 @@ namespace input {
   /**
    * @brief Allocate and initialize platform input state for a stream.
    */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id) {
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, std::uint64_t window_id) {
     std::shared_ptr<input_t> input;
     bool resumed = false;
     {
@@ -2447,6 +2455,7 @@ namespace input {
         state.inputs.try_emplace(std::move(session_id), input);
       }
     }
+    input->window_id = window_id;
 
     if (resumed) {
       dispatch_input_task([input, mail = std::move(mail)]() {

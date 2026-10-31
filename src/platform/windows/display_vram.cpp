@@ -1860,10 +1860,14 @@ namespace platf::dxgi {
   capture_e display_wgc_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
     texture2d_t src;
     uint64_t frame_qpc;
-    dup.set_cursor_visible(cursor_visible);
+    // In a window stream the client's own pointer is the pointer
+    dup.set_cursor_visible(cursor_visible && !capture_window);
     auto capture_status = dup.next_frame(timeout, &src, frame_qpc);
     if (capture_status != capture_e::ok) {
       return capture_status;
+    }
+    if (capture_window_moved()) {
+      return capture_e::reinit;
     }
 
     auto frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), frame_qpc);

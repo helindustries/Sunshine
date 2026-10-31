@@ -356,6 +356,15 @@ namespace platf::dxgi {
     DXGI_FORMAT capture_format;  ///< Capture format.
     D3D_FEATURE_LEVEL feature_level;  ///< Feature level.
 
+    HWND capture_window {};  ///< Window a window capture (output name "window:<id>") follows; null for a monitor.
+    RECT capture_window_bounds {};  ///< The window's bounds the offsets were taken from.
+
+    /**
+     * @brief Whether the captured window moved since init, which leaves absolute input mapped to its old place.
+     * @return True for a window capture whose bounds changed, false for a monitor.
+     */
+    [[nodiscard]] bool capture_window_moved() const;
+
     std::unique_ptr<high_precision_timer> timer = create_high_precision_timer();  ///< Timer.
 
     /**
@@ -749,6 +758,7 @@ namespace platf::dxgi {
     winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice uwp_device {nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item {nullptr};
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool frame_pool {nullptr};
+    winrt::Windows::Graphics::SizeInt32 pool_size {};  ///< Size the frame pool was created with.
     winrt::Windows::Graphics::Capture::GraphicsCaptureSession capture_session {nullptr};
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame produced_frame {nullptr};
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame consumed_frame {nullptr};

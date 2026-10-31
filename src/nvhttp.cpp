@@ -535,6 +535,7 @@ namespace nvhttp {
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
     launch_session->profile_id = get_arg(args, "profileId", "");
+    launch_session->window_id = std::strtoull(get_arg(args, "windowId", "0").c_str(), nullptr, 10);
     launch_session->virtual_display_requested = util::from_view(get_arg(args, "virtualDisplay", "0"));
     launch_session->scale_factor = std::clamp((int) util::from_view(get_arg(args, "scaleFactor", "100")), 20, 400);
 
@@ -1403,6 +1404,162 @@ namespace nvhttp {
   std::mutex launch_mutex;
 
   /**
+   * @brief What a launching or resuming session captures.
+   * @param session The session, with the client's windowId and mode.
+   * @return The window it asked for (coherence mode), else a virtual display of its own.
+   */
+  std::string session_output_name(const rtsp_stream::launch_session_t &session) {
+    return session.window_id != 0 ? std::string {platf::host_window_prefix} + std::to_string(session.window_id) : display_device::acquire_virtual_display(config::video, session);
+  }
+
+  /**
+   * @brief Coherence mode's window list: the host windows a client can stream one by one.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void windows(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    pt::ptree tree;
+    auto g = util::fail_guard([&tree, &response]() {
+      std::ostringstream data;
+
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+    });
+
+    auto &root = tree.add_child("root", pt::ptree {});
+    if ((client_permissions(last_verified_client_cert) & permission::list) != permission::list) {
+      root.put("<xmlattr>.status_code", 401);
+      root.put("<xmlattr>.status_message", "This client may not list the host's windows");
+    } else {
+      root.put("<xmlattr>.status_code", 200);
+      for (const auto &window : platf::host_windows()) {
+        pt::ptree node;
+        node.put("ID", window.id);
+        node.put("Title", window.title);
+        node.put("Process", window.process);
+        node.put("X", window.x);
+        node.put("Y", window.y);
+        node.put("Width", window.width);
+        node.put("Height", window.height);
+        node.put("Minimized", window.minimized ? 1 : 0);
+        root.push_back(std::make_pair("Window", node));
+      }
+    }
+  }
+
+  /**
+   * @brief Coherence mode's pinned apps: what a client offers as launchers of its own.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void pinned_apps(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    pt::ptree tree;
+    auto g = util::fail_guard([&tree, &response]() {
+      std::ostringstream data;
+
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+    });
+
+    auto &root = tree.add_child("root", pt::ptree {});
+    if ((client_permissions(last_verified_client_cert) & permission::list) != permission::list) {
+      root.put("<xmlattr>.status_code", 401);
+      root.put("<xmlattr>.status_message", "This client may not list the host's apps");
+    } else {
+      root.put("<xmlattr>.status_code", 200);
+      for (const auto &app : platf::pinned_host_apps()) {
+        pt::ptree node;
+        node.put("ID", app.id);
+        node.put("Name", app.name);
+        root.push_back(std::make_pair("App", node));
+      }
+    }
+  }
+
+  /**
+   * @brief A pinned app's icon as PNG, by the id the pinned app list gave.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void pinned_app_icon(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    auto status {SimpleWeb::StatusCode::success_ok};
+    std::string png;
+    if ((client_permissions(last_verified_client_cert) & permission::list) != permission::list) {
+      status = SimpleWeb::StatusCode::client_error_unauthorized;
+    } else if (png = platf::pinned_host_app_icon(get_arg(request->parse_query_string(), "id", "")); png.empty()) {
+      status = SimpleWeb::StatusCode::client_error_not_found;
+    }
+
+    response->write(status, png, {{"Content-Type", status == SimpleWeb::StatusCode::success_ok ? "image/png" : "text/plain"}});
+    response->close_connection_after_response = true;
+  }
+
+  /**
+   * @brief Start a pinned app, by the id the pinned app list gave; nothing else can be started.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void launch_pinned_app(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    auto status {SimpleWeb::StatusCode::success_ok};
+    if ((client_permissions(last_verified_client_cert) & permission::launch) != permission::launch) {
+      status = SimpleWeb::StatusCode::client_error_unauthorized;
+    } else if (!platf::launch_pinned_host_app(get_arg(request->parse_query_string(), "id", ""))) {
+      status = SimpleWeb::StatusCode::client_error_not_found;
+    }
+
+    response->write(status);
+    response->close_connection_after_response = true;
+  }
+
+  /**
+   * @brief Coherence mode's window actions: op=raise brings a host window to the front (restoring
+   *        it when minimized), op=resize gives it the size its client window was given.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void window_action(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    const auto args {request->parse_query_string()};
+    const auto id {std::strtoull(get_arg(args, "id", "0").c_str(), nullptr, 10)};
+    const auto op {get_arg(args, "op", "")};
+    auto status {SimpleWeb::StatusCode::success_ok};
+    if ((client_permissions(last_verified_client_cert) & permission::input_mouse) != permission::input_mouse) {
+      status = SimpleWeb::StatusCode::client_error_unauthorized;
+    } else if (id == 0) {
+      status = SimpleWeb::StatusCode::client_error_bad_request;
+    } else if (op == "raise") {
+      platf::raise_host_window(id);
+    } else if (op == "resize") {
+      const auto width {std::atoi(get_arg(args, "width", "0").c_str())};
+      const auto height {std::atoi(get_arg(args, "height", "0").c_str())};
+      if (!platf::resize_host_window(id, width, height)) {
+        status = SimpleWeb::StatusCode::client_error_not_found;
+      }
+    } else {
+      status = SimpleWeb::StatusCode::client_error_bad_request;
+    }
+
+    response->write(status);
+    response->close_connection_after_response = true;
+  }
+
+  /**
    * @brief Launch the requested application for a GameStream session.
    *
    * @param host_audio Host audio.
@@ -1495,8 +1652,8 @@ namespace nvhttp {
       return;
     }
 
-    // Every session gets its own virtual display, after probe_encoders(): the encoder test cannot capture it
-    launch_session->output_name = display_device::acquire_virtual_display(config::video, *launch_session);
+    // Every session gets its own virtual display or window, after probe_encoders(): the encoder test cannot capture it
+    launch_session->output_name = session_output_name(*launch_session);
 
     if (appid > 0 && proc::proc.running() != appid) {
       auto err = proc::proc.execute((int) appid, launch_session);
@@ -1613,7 +1770,7 @@ namespace nvhttp {
     }
 
     // A resuming client gets its earlier display back when that session has ended, else a new one
-    launch_session->output_name = display_device::acquire_virtual_display(config::video, *launch_session);
+    launch_session->output_name = session_output_name(*launch_session);
 
     tree.put("root.<xmlattr>.status_code", 200);
     tree.put(
@@ -1829,6 +1986,11 @@ namespace nvhttp {
       pair<SunshineHTTPS>(resp, req);
     };
     https_server.resource["^/applist$"]["GET"] = applist;
+    https_server.resource["^/windows$"]["GET"] = windows;
+    https_server.resource["^/pinnedapps$"]["GET"] = pinned_apps;
+    https_server.resource["^/pinnedapps/icon$"]["GET"] = pinned_app_icon;
+    https_server.resource["^/actions/launch$"]["GET"] = launch_pinned_app;
+    https_server.resource["^/actions/window$"]["GET"] = window_action;
     https_server.resource["^/appasset$"]["GET"] = appasset;
     https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
       launch(host_audio, resp, req);
