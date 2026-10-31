@@ -612,7 +612,7 @@ namespace platf {
     // Nothing to do
   }
 
-  std::string virtual_display_create([[maybe_unused]] int width, [[maybe_unused]] int height, [[maybe_unused]] int fps) {
+  std::string virtual_display_create([[maybe_unused]] int width, [[maybe_unused]] int height, [[maybe_unused]] int fps, [[maybe_unused]] std::uint32_t identity) {
     // KDE and Sway/Hyprland make the output at once; GNOME's virtual monitor exists only while the
     // portal stream that asks for it does, so its capture creates it from the size in the name
     std::string output_name;

@@ -990,6 +990,40 @@ namespace display_device {
     }
   }  // namespace
 
+  std::uint32_t virtual_display_identity(const std::string &client_id, const std::string &profile_id) {
+    // FNV-1a: std::hash may change between builds, and identities outlive them
+    std::uint32_t identity {};
+    if (!profile_id.empty()) {
+      identity = 2166136261u;
+      for (const auto character : client_id + '#' + profile_id) {
+        identity = (identity ^ static_cast<std::uint8_t>(character)) * 16777619u;
+      }
+      identity = identity == 0 ? 1 : identity;
+    }
+    return identity;
+  }
+
+  int choose_virtual_display_slot(std::uint32_t identity, const std::set<int> &used, std::map<std::uint32_t, int> &known, int slot_count) {
+    auto slot {-1};
+    if (const auto had {known.find(identity)}; identity != 0 && had != known.end() && !used.contains(had->second)) {
+      slot = had->second;
+    }
+    for (auto candidate {0}; slot < 0 && candidate < slot_count; ++candidate) {
+      if (!used.contains(candidate) && std::ranges::none_of(known, [&](const auto &entry) { return entry.second == candidate && entry.first != identity; })) {
+        slot = candidate;
+      }
+    }
+    for (auto candidate {0}; slot < 0 && candidate < slot_count; ++candidate) {
+      if (!used.contains(candidate)) {
+        slot = candidate;
+      }
+    }
+    if (slot >= 0 && identity != 0 && !known.contains(identity)) {
+      known[identity] = slot;
+    }
+    return slot;
+  }
+
   std::string acquire_virtual_display(const config::video_t &video_config, const rtsp_stream::launch_session_t &session) {
     std::string output_name;
     const auto wanted {video_config.virtual_display == "enabled" || session.virtual_display_requested};
@@ -1023,7 +1057,12 @@ namespace display_device {
           virtual_screens.erase(free_screen);
         }
 
-        output_name = platf::virtual_display_create(width, height, fps);
+        // A profile's screen is the same monitor every time, unless another screen of the same
+        // profile still exists: two monitors cannot share an identity
+        const auto identity_taken {std::ranges::any_of(virtual_screens, [&](const auto &screen) {
+          return screen.client_id == client_id && screen.profile_id == session.profile_id;
+        })};
+        output_name = platf::virtual_display_create(width, height, fps, identity_taken ? 0 : virtual_display_identity(client_id, session.profile_id));
         if (!output_name.empty()) {
           virtual_screens.push_back({client_id, session.profile_id, output_name, width, height, fps, true});
           BOOST_LOG(info) << "Created virtual display "sv << output_name << " ("sv << width << 'x' << height << '@' << fps << "Hz, "sv << virtual_screens.size() << " in total)"sv;

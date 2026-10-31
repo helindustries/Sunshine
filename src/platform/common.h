@@ -6,11 +6,15 @@
 
 // standard includes
 #include <bitset>
+#include <charconv>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 // lib includes
 #include <boost/core/noncopyable.hpp>
@@ -1323,10 +1327,12 @@ namespace platf {
    * @param width Display width in pixels.
    * @param height Display height in pixels.
    * @param fps Refresh rate in Hz.
+   * @param identity Stable identity of the screen (display_device::virtual_display_identity), so
+   *                 the system recognises it and restores its arrangement; 0 for none.
    * @return Output name that platf::display() captures the new display by, empty on failure
    *         or where the platform has no virtual displays.
    */
-  std::string virtual_display_create(int width, int height, int fps);
+  std::string virtual_display_create(int width, int height, int fps, std::uint32_t identity);
 
   /**
    * @brief Destroy a virtual display created by virtual_display_create().

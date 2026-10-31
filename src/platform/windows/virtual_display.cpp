@@ -11,13 +11,18 @@
 // standard includes
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <format>
+#include <fstream>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 
 // local includes
 #include "src/config.h"
+#include "src/display_device.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/windows/misc.h"
@@ -45,6 +50,39 @@ namespace platf {
     };
 
     std::map<std::string, sudovda_display_t> sudovda_displays;  ///< By output name.
+
+    std::map<std::uint32_t, int> slot_of_identity;  ///< The slot each screen identity had, kept in slots_file().
+    bool slot_records_loaded {false};
+
+    /**
+     * @brief Where a profile's slot is recorded: its slot is its monitor GUID, and Windows keeps a
+     *        monitor's arrangement by it, so the record must outlive restarts.
+     */
+    std::filesystem::path slots_file() {
+      return std::filesystem::path {config::sunshine.config_file}.parent_path() / "virtual_display_slots.txt";
+    }
+
+    void load_slot_records() {
+      if (!slot_records_loaded) {
+        slot_records_loaded = true;
+        std::ifstream file {slots_file()};
+        std::uint32_t identity {};
+        int slot {};
+        while (file >> identity >> slot) {
+          slot_of_identity[identity] = slot;
+        }
+      }
+    }
+
+    void save_slot_records() {
+      std::ofstream file {slots_file(), std::ios::trunc};
+      for (const auto &[identity, slot] : slot_of_identity) {
+        file << identity << ' ' << slot << '\n';
+      }
+      if (!file) {
+        BOOST_LOG(warning) << "SudoVDA: couldn't record the profiles' display slots in "sv << slots_file().string();
+      }
+    }
 
     /**
      * @brief The monitor GUID of a slot. Fixed GUIDs let a restart remove displays a crashed run left
@@ -177,21 +215,32 @@ namespace platf {
     }
   }  // namespace
 
-  std::string virtual_display_create(int width, int height, int fps) {
+  std::string virtual_display_create(int width, int height, int fps, std::uint32_t identity) {
     std::string output_name;
     std::lock_guard lock {sudovda_mutex};
 
-    auto slot = 0;
-    while (slot < max_virtual_displays && std::ranges::any_of(sudovda_displays, [slot](const auto &display) { return display.second.slot == slot; })) {
-      ++slot;
+    load_slot_records();
+    std::set<int> used;
+    for (const auto &[name, display] : sudovda_displays) {
+      used.insert(display.slot);
     }
+    const auto records {slot_of_identity.size()};
+    const auto slot {display_device::choose_virtual_display_slot(identity, used, slot_of_identity, max_virtual_displays)};
+    if (slot_of_identity.size() != records) {
+      save_slot_records();
+    }
+    BOOST_LOG(debug) << "SudoVDA: screen identity "sv << identity << " takes slot "sv << slot;
 
-    if (slot == max_virtual_displays) {
+    if (slot < 0) {
       BOOST_LOG(error) << "SudoVDA: all "sv << max_virtual_displays << " virtual display slots are in use"sv;
     } else if (open_sudovda()) {
       const auto guid {slot_guid(slot)};
+      // Windows keeps a monitor's arrangement by its EDID serial (the monitor ID in
+      // GraphicsDrivers\Configuration), not by the GUID or the device instance, which SudoVDA
+      // numbers in creation order. SudoVDA keeps 13 characters of it.
+      const auto serial {identity != 0 ? std::format("{:08X}", identity) : std::format("Slot{:02}", slot)};
       SUDOVDA::VIRTUAL_DISPLAY_ADD_OUT added;
-      if (SUDOVDA::AddVirtualDisplay(sudovda_handle, width, height, fps, guid, "Sunshine", "Sunshine", added)) {
+      if (SUDOVDA::AddVirtualDisplay(sudovda_handle, width, height, fps, guid, "Sunshine", serial.c_str(), added)) {
         // The display reaches the active display configuration a while after the driver adds it,
         // about 1.1 s on an Intel Iris Xe alone. Windows keeps it detached instead when the
         // topology it saved for this set of displays has no place for it, so after a while the

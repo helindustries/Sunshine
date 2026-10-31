@@ -6,8 +6,11 @@
 
 // standard includes
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 
 // lib includes
@@ -130,6 +133,28 @@ namespace display_device {
    * @note Must be called AFTER probe_encoders() to avoid capturing an unready display.
    */
   std::string acquire_virtual_display(const config::video_t &video_config, const rtsp_stream::launch_session_t &session);
+
+  /**
+   * @brief The identity a client's stream profile gives its virtual displays, so the system
+   *        recognises the screen next time and restores the arrangement made for it.
+   * @param client_id Paired client certificate, or the unique id of an unpaired client.
+   * @param profile_id The client's stream profile.
+   * @return A stable hash of both, 0 (no identity) for a client that sends no profile.
+   */
+  std::uint32_t virtual_display_identity(const std::string &client_id, const std::string &profile_id);
+
+  /**
+   * @brief Choose a numbered virtual display slot (Windows' SudoVDA) for a screen identity.
+   * @details A known identity gets its slot back while it is free. Anything else takes the lowest
+   *          free slot no other identity had, so other profiles' screens keep theirs, and only
+   *          when there is none the lowest free slot at all.
+   * @param identity From virtual_display_identity(), 0 for none.
+   * @param used Slots in use now.
+   * @param known Identity -> slot it had before; records the choice for an identity without one.
+   * @param slot_count Number of slots.
+   * @return The slot, -1 when all are in use.
+   */
+  int choose_virtual_display_slot(std::uint32_t identity, const std::set<int> &used, std::map<std::uint32_t, int> &known, int slot_count);
 
   /**
    * @brief Mark a session's virtual display as free for its client to reconnect to.

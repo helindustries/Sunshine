@@ -678,6 +678,35 @@ namespace {
 
 using namespace std::chrono_literals;
 
+TEST(VirtualDisplayIdentity, IsStablePerClientAndProfileAndAbsentWithoutAProfile) {
+  const auto identity {display_device::virtual_display_identity("client-a", "profile-1")};
+  EXPECT_NE(identity, 0u);
+  EXPECT_EQ(display_device::virtual_display_identity("client-a", "profile-1"), identity);
+  EXPECT_NE(display_device::virtual_display_identity("client-a", "profile-2"), identity);
+  EXPECT_NE(display_device::virtual_display_identity("client-b", "profile-1"), identity);
+  EXPECT_EQ(display_device::virtual_display_identity("client-a", ""), 0u);
+  // FNV-1a of "client-a#profile-1": identities are recorded across restarts and builds
+  EXPECT_EQ(identity, 0x733cbed4u);
+}
+
+TEST(VirtualDisplaySlot, AProfileGetsItsSlotBackAndOthersKeepTheirs) {
+  std::map<std::uint32_t, int> known;
+  EXPECT_EQ(display_device::choose_virtual_display_slot(11, {}, known, 4), 0);
+  EXPECT_EQ(display_device::choose_virtual_display_slot(22, {0}, known, 4), 1);
+  EXPECT_EQ(known, (std::map<std::uint32_t, int> {{11, 0}, {22, 1}}));
+
+  // Started alone later, the second profile still gets slot 1, and a new one skips both
+  EXPECT_EQ(display_device::choose_virtual_display_slot(22, {}, known, 4), 1);
+  EXPECT_EQ(display_device::choose_virtual_display_slot(33, {1}, known, 4), 2);
+
+  // A taken slot is not the profile's to have; with every unowned slot used, any free one serves
+  EXPECT_EQ(display_device::choose_virtual_display_slot(11, {0}, known, 4), 3);
+  EXPECT_EQ(known[11], 0);
+  EXPECT_EQ(display_device::choose_virtual_display_slot(44, {0, 2, 3}, known, 4), 1);
+  EXPECT_EQ(display_device::choose_virtual_display_slot(0, {0, 1, 2, 3}, known, 4), -1);
+  EXPECT_FALSE(known.contains(0));
+}
+
 TEST(DisplayDeviceRevert, CompletedRevertStopsTheRetryLoop) {
   [[maybe_unused]] const display_device_revert_guard_t guard;
   display_device::test_set_retry_interval(30ms);

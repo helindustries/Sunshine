@@ -15,9 +15,10 @@ extern "C" {
  * @param width Display width in pixels.
  * @param height Display height in pixels.
  * @param fps Refresh rate in Hz.
+ * @param serial The display's serial number, which macOS keeps its arrangement by; 0 for a random one.
  * @return The CGDirectDisplayID of the created display, or 0 on failure.
  */
-uint32_t virtual_display_create(int width, int height, int fps);
+uint32_t virtual_display_create(int width, int height, int fps, uint32_t serial);
 
 /**
  * @brief Destroy one virtual display created by virtual_display_create().

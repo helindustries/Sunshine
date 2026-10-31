@@ -55,7 +55,7 @@ static void stop_helper(pid_t pid) {
   }
 }
 
-uint32_t virtual_display_create(int width, int height, int fps) {
+uint32_t virtual_display_create(int width, int height, int fps, uint32_t serial) {
   pthread_mutex_lock(&vd_mutex);
 
   uint32_t displayID = 0;
@@ -77,12 +77,13 @@ uint32_t virtual_display_create(int width, int height, int fps) {
     if (pipe(pipefd) != 0) {
       NSLog(@"[Sunshine] pipe() failed: %s", strerror(errno));
     } else {
-      char widthStr[16], heightStr[16], fpsStr[16];
+      char widthStr[16], heightStr[16], fpsStr[16], serialStr[16];
       snprintf(widthStr, sizeof(widthStr), "%d", width);
       snprintf(heightStr, sizeof(heightStr), "%d", height);
       snprintf(fpsStr, sizeof(fpsStr), "%d", fps);
+      snprintf(serialStr, sizeof(serialStr), "%u", serial);
 
-      const char *argv[] = {[helper fileSystemRepresentation], widthStr, heightStr, fpsStr, NULL};
+      const char *argv[] = {[helper fileSystemRepresentation], widthStr, heightStr, fpsStr, serialStr, NULL};
 
       // Child's stdout goes to the pipe's write end
       posix_spawn_file_actions_t actions;

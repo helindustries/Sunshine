@@ -152,7 +152,7 @@ static void forceExtendMode(CGDirectDisplayID virtualID) {
 
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
-    if (argc != 4) {
+    if (argc != 5) {
       fprintf(stdout, "0\n");
       fflush(stdout);
       return 1;
@@ -161,6 +161,8 @@ int main(int argc, const char *argv[]) {
     int width = atoi(argv[1]);
     int height = atoi(argv[2]);
     int fps = atoi(argv[3]);
+    // macOS keeps a display's arrangement by vendor, product and serial
+    unsigned int serial = (unsigned int)strtoul(argv[4], NULL, 10);
 
     if (width <= 0 || height <= 0 || fps <= 0) {
       fprintf(stdout, "0\n");
@@ -190,7 +192,7 @@ int main(int argc, const char *argv[]) {
     desc.name = @"Sunshine Virtual Display";
     desc.vendorID = 0xF0F0;
     desc.productID = 0x5678;
-    desc.serialNum = arc4random();
+    desc.serialNum = serial != 0 ? serial : arc4random();
     desc.maxPixelsWide = (unsigned int)width;
     desc.maxPixelsHigh = (unsigned int)height;
     // Fixed 27" monitor physical size — do NOT scale linearly with resolution.

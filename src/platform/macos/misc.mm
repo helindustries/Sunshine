@@ -524,8 +524,8 @@ namespace platf {
     // Nothing to do
   }
 
-  std::string virtual_display_create(int width, int height, int fps) {
-    const auto display_id = ::virtual_display_create(width, height, fps);
+  std::string virtual_display_create(int width, int height, int fps, std::uint32_t identity) {
+    const auto display_id = ::virtual_display_create(width, height, fps, identity);
     return display_id == 0 ? std::string {} : std::to_string(display_id);
   }
 
