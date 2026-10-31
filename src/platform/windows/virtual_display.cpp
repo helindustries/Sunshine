@@ -198,9 +198,13 @@ namespace platf {
           for (auto slot = 0; slot < max_virtual_displays; ++slot) {
             SUDOVDA::RemoveVirtualDisplay(sudovda_handle, slot_guid(slot));
           }
+          // SudoVDA opens its handle overlapped but passes no OVERLAPPED, so two calls in flight on
+          // one handle wake each other's waits and the kernel then writes into a returned frame
+          // (access violation at KERNELBASE!DeviceIoControl+0x9e). The watchdog pings on its own
+          // handle; the others are used under sudovda_mutex, one call at a time.
           if (watchdog.Timeout) {
-            std::thread {[interval = std::chrono::milliseconds {watchdog.Timeout * 1000 / 3}]() {
-              while (SUDOVDA::PingDriver(sudovda_handle)) {
+            std::thread {[interval = std::chrono::milliseconds {watchdog.Timeout * 1000 / 3}, ping_handle = SUDOVDA::OpenDevice(&SUDOVDA::SUVDA_INTERFACE_GUID)]() {
+              while (SUDOVDA::PingDriver(ping_handle)) {
                 std::this_thread::sleep_for(interval);
               }
               BOOST_LOG(error) << "SudoVDA: driver ping failed, its virtual displays will be removed"sv;
