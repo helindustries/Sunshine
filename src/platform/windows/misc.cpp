@@ -310,11 +310,14 @@ namespace platf {
   }
 
   bool console_user_logged_on() {
+    // The session's user name, not WTSQueryUserToken: that needs SYSTEM's privilege, so a server
+    // run as the user would always find nobody signed in
     auto logged_on = false;
-    HANDLE token = nullptr;
-    if (const auto session = WTSGetActiveConsoleSessionId(); session != 0xFFFFFFFF && WTSQueryUserToken(session, &token)) {
-      CloseHandle(token);
-      logged_on = true;
+    LPWSTR user_name = nullptr;
+    DWORD size = 0;
+    if (const auto session = WTSGetActiveConsoleSessionId(); session != 0xFFFFFFFF && WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, session, WTSUserName, &user_name, &size) && user_name != nullptr) {
+      logged_on = user_name[0] != L'\0';
+      WTSFreeMemory(user_name);
     }
     return logged_on;
   }
