@@ -68,7 +68,7 @@ Credits:
 - [SudoVDA](https://github.com/SudoMaker/SudoVDA) by SudoMaker: the virtual display driver used
   on Windows.
 
-The license remains GPL-3.0 as upstream. Everything below this section is upstream's README.
+The license remains GPL-3.0-only, as upstream. Everything below this section is upstream's README.
 
 ## ℹ️ About
 
