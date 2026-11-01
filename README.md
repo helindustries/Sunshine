@@ -46,6 +46,30 @@
   <a href="https://sonarcloud.io/project/overview?id=LizardByte_Sunshine"><img src="https://img.shields.io/sonar/quality_gate/LizardByte_Sunshine.svg?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud&label=sonarcloud" alt="SonarCloud"></a>
 </div>
 
+## About this fork
+
+This fork aims to create a single server for Windows and macOS, with Linux to follow, that serves
+several streams at once, each on its own virtual screen sized by the client.
+
+Coherence mode lets every window of a Windows host appear as its own window on a macOS client,
+similar to Parallels Coherence. It needs the matching
+[Artemis fork](https://github.com/helindustries/artemis).
+
+Current status is preview. Coherence mode works on Windows hosts only; the Linux and macOS
+servers build but have no coherence mode. Releases:
+[helindustries/Sunshine releases](https://github.com/helindustries/Sunshine/releases)
+
+Credits:
+- [Sunshine](https://github.com/LizardByte/Sunshine) by LizardByte: the base of this fork.
+- [Lumen](https://github.com/trollzem/Lumen) by trollzem: the macOS ScreenCaptureKit capture,
+  virtual displays and HID gamepad fallback are ported from this project.
+- [Apollo](https://github.com/ClassicOldSong/Apollo) by ClassicOldSong: the SudoVDA interface
+  headers in `third-party/sudovda` are taken from this project unchanged.
+- [SudoVDA](https://github.com/SudoMaker/SudoVDA) by SudoMaker: the virtual display driver used
+  on Windows.
+
+The license remains GPL-3.0 as upstream. Everything below this section is upstream's README.
+
 ## ℹ️ About
 
 Sunshine is a self-hosted game stream host for Moonlight.
