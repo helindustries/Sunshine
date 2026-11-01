@@ -14,6 +14,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 
 // lib includes
@@ -1781,9 +1782,13 @@ namespace nvhttp {
       status = SimpleWeb::StatusCode::client_error_unauthorized;
     } else if (get_arg(args, "op", "") == "stop") {
       // The window streams capture on the coherence screen and end first (this joins them): a
-      // capture whose display vanishes never stops, and the hang check kills the server
-      rtsp_stream::terminate_window_sessions(last_verified_client_cert);
-      platf::release_coherence_screen(last_verified_client_cert);
+      // capture whose display vanishes never stops, and the hang check kills the server.
+      // Removing the screens takes seconds, and this server answers one request at a time: a
+      // client's host check waiting that long would take the host for gone
+      std::thread {[client_id = last_verified_client_cert]() {
+        rtsp_stream::terminate_window_sessions(client_id);
+        platf::release_coherence_screen(client_id);
+      }}.detach();
     } else if (get_arg(args, "op", "") == "startmenu") {
       if (!platf::open_coherence_start_menu(last_verified_client_cert)) {
         status = SimpleWeb::StatusCode::client_error_not_found;
