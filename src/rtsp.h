@@ -150,6 +150,14 @@ namespace rtsp_stream {
   void terminate_sessions_by_cert(std::string_view cert);
 
   /**
+   * @brief End a client's window streams (coherence mode) and wait for them; its other streams
+   *        keep running.
+   *
+   * @param cert Certificate of the client.
+   */
+  void terminate_window_sessions(std::string_view cert);
+
+  /**
    * @brief Runs the RTSP server loop.
    */
   void start();

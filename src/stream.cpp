@@ -2235,6 +2235,10 @@ namespace stream {
       return session.client_cert;
     }
 
+    const std::string &output_name(session_t &session) {
+      return session.config.monitor.output_name;
+    }
+
     /**
      * @brief Stop the active streaming session and prevent new packets from being queued.
      */

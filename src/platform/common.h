@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // lib includes
@@ -1407,6 +1408,24 @@ namespace platf {
    * @return Whether the window took the size.
    */
   bool resize_host_window(std::uint64_t id, int width, int height);
+
+  /**
+   * @brief Coherence mode's screen for a client: a virtual display holding the windows it
+   *        mirrors, the client's free screen area with the host's taskbar below it, so a
+   *        window maximized there fills exactly that area. Windows on other displays are moved
+   *        onto it, keeping their place in their work area as far as it fits.
+   * @param client_id Paired client the screen belongs to; one screen per client.
+   * @param width Width of the client's free screen area, in pixels.
+   * @param height Height of the client's free screen area, in pixels.
+   * @return The screen's top-left corner on the host desktop, nullopt where none could be made.
+   */
+  std::optional<std::pair<int, int>> coherence_screen(const std::string &client_id, int width, int height);
+
+  /**
+   * @brief Remove a client's coherence screen; the system moves its windows to another display.
+   * @param client_id Paired client the screen belongs to.
+   */
+  void release_coherence_screen(const std::string &client_id);
 
   /**
    * @brief An app the host's user pinned, which a client can start in coherence mode.

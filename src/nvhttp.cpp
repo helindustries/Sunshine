@@ -1436,13 +1436,28 @@ namespace nvhttp {
       root.put("<xmlattr>.status_message", "This client may not list the host's windows");
     } else {
       root.put("<xmlattr>.status_code", 200);
+
+      // Coherence mode sends the client's free screen area: the windows gather on a screen of
+      // that size, and their positions are relative to it
+      const auto args {request->parse_query_string()};
+      const auto screen_width {std::atoi(get_arg(args, "screenWidth", "0").c_str())};
+      const auto screen_height {std::atoi(get_arg(args, "screenHeight", "0").c_str())};
+      auto origin {std::make_pair(0, 0)};
+      if (screen_width > 0 && screen_height > 0) {
+        if (const auto screen_origin {platf::coherence_screen(last_verified_client_cert, screen_width, screen_height)}; screen_origin) {
+          origin = *screen_origin;
+          root.put("ScreenWidth", screen_width);
+          root.put("ScreenHeight", screen_height);
+        }
+      }
+
       for (const auto &window : platf::host_windows()) {
         pt::ptree node;
         node.put("ID", window.id);
         node.put("Title", window.title);
         node.put("Process", window.process);
-        node.put("X", window.x);
-        node.put("Y", window.y);
+        node.put("X", window.x - origin.first);
+        node.put("Y", window.y - origin.second);
         node.put("Width", window.width);
         node.put("Height", window.height);
         node.put("Minimized", window.minimized ? 1 : 0);
@@ -1551,6 +1566,33 @@ namespace nvhttp {
       if (!platf::resize_host_window(id, width, height)) {
         status = SimpleWeb::StatusCode::client_error_not_found;
       }
+    } else {
+      status = SimpleWeb::StatusCode::client_error_bad_request;
+    }
+
+    response->write(status);
+    response->close_connection_after_response = true;
+  }
+
+  /**
+   * @brief Coherence mode's end for a client: its coherence screen goes, and with it the windows
+   *        go back to the host's own displays.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void coherence_action(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    const auto args {request->parse_query_string()};
+    auto status {SimpleWeb::StatusCode::success_ok};
+    if ((client_permissions(last_verified_client_cert) & permission::list) != permission::list) {
+      status = SimpleWeb::StatusCode::client_error_unauthorized;
+    } else if (get_arg(args, "op", "") == "stop") {
+      // The window streams capture on the coherence screen and end first (this joins them): a
+      // capture whose display vanishes never stops, and the hang check kills the server
+      rtsp_stream::terminate_window_sessions(last_verified_client_cert);
+      platf::release_coherence_screen(last_verified_client_cert);
     } else {
       status = SimpleWeb::StatusCode::client_error_bad_request;
     }
@@ -1991,6 +2033,7 @@ namespace nvhttp {
     https_server.resource["^/pinnedapps/icon$"]["GET"] = pinned_app_icon;
     https_server.resource["^/actions/launch$"]["GET"] = launch_pinned_app;
     https_server.resource["^/actions/window$"]["GET"] = window_action;
+    https_server.resource["^/actions/coherence$"]["GET"] = coherence_action;
     https_server.resource["^/appasset$"]["GET"] = appasset;
     https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
       launch(host_audio, resp, req);

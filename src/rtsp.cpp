@@ -675,12 +675,13 @@ namespace rtsp_stream {
      * @brief Clear by cert state.
      *
      * @param cert Certificate data or object used by the operation.
+     * @param windows_only Only the client's window streams (coherence mode).
      */
-    void clear_by_cert(std::string_view cert) {
+    void clear_by_cert(std::string_view cert, bool windows_only = false) {
       auto lg = _session_slots.lock();
       for (auto i = _session_slots->begin(); i != _session_slots->end();) {
         auto &slot = *(*i);
-        if (stream::session::client_cert(slot) == cert) {
+        if (stream::session::client_cert(slot) == cert && (!windows_only || platf::host_window_id(stream::session::output_name(slot)) != 0)) {
           stream::session::stop(slot);
           stream::session::join(slot);
           i = _session_slots->erase(i);
@@ -791,6 +792,10 @@ namespace rtsp_stream {
   void terminate_sessions_by_cert(std::string_view cert) {
     server.clear_by_cert(cert);
     input::terminate_gamepads(cert);
+  }
+
+  void terminate_window_sessions(std::string_view cert) {
+    server.clear_by_cert(cert, true);
   }
 
   /**

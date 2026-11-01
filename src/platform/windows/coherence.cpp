@@ -10,8 +10,10 @@
 #include <initializer_list>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 // local includes required before platform includes
@@ -28,6 +30,7 @@
 
 // local includes
 #include "misc.h"
+#include "src/display_device.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/utility.h"
@@ -209,6 +212,92 @@ namespace platf {
       }
       return png;
     }
+
+    // Coherence screens refresh at this rate; the windows on them are streamed at their own
+    constexpr int coherence_screen_fps {60};
+
+    /**
+     * @brief A client's coherence screen and the free area it was sized for.
+     */
+    struct coherence_screen_t {
+      std::string output_name;  ///< The virtual display.
+      int width;  ///< Width of the client's free area.
+      int height;  ///< Height of the client's free area, the screen's work area.
+      std::map<HWND, WINDOWPLACEMENT> home;  ///< Where each gathered window was, to put it back.
+    };
+
+    std::mutex coherence_mutex;
+    std::map<std::string, coherence_screen_t> coherence_screens;  ///< By client.
+
+    // The coherence screen adds the taskbar below the client's free area, as tall as the
+    // primary display's: Windows shows a taskbar on every display unless told otherwise
+    int primary_taskbar_height() {
+      auto height {0};
+      if (MONITORINFO info {.cbSize = sizeof(MONITORINFO)}; GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &info)) {
+        height = (info.rcMonitor.bottom - info.rcMonitor.top) - (info.rcWork.bottom - info.rcWork.top);
+      }
+      return height;
+    }
+
+    std::optional<RECT> output_rect(const std::string &output_name) {
+      std::optional<RECT> rect;
+      DEVMODEW mode {};
+      mode.dmSize = sizeof(mode);
+      if (EnumDisplaySettingsW(utf_utils::from_utf8(output_name).c_str(), ENUM_CURRENT_SETTINGS, &mode)) {
+        rect = RECT {mode.dmPosition.x, mode.dmPosition.y, mode.dmPosition.x + static_cast<LONG>(mode.dmPelsWidth), mode.dmPosition.y + static_cast<LONG>(mode.dmPelsHeight)};
+      }
+      return rect;
+    }
+
+    /**
+     * @brief Move a window onto a coherence screen, keeping its offset in the work area it was
+     *        on and shrinking it to fit; a maximized window is maximized there again. Minimized
+     *        windows stay until restored, the next gathering moves them.
+     */
+    void gather_window(HWND hwnd, const RECT &screen, int work_width, int work_height, std::map<HWND, WINDOWPLACEMENT> &home) {
+      const auto monitor {MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)};
+      if (!IsIconic(hwnd) && monitor != MonitorFromRect(&screen, MONITOR_DEFAULTTONULL)) {
+        if (WINDOWPLACEMENT placement {.length = sizeof(WINDOWPLACEMENT)}; GetWindowPlacement(hwnd, &placement)) {
+          home.try_emplace(hwnd, placement);
+        }
+
+        // Asynchronous calls throughout: this runs on the HTTPS thread, which serves one request
+        // at a time, and a synchronous move waits for every window's own thread to handle it
+        const auto maximized {IsZoomed(hwnd) != FALSE};
+        if (maximized) {
+          ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE);
+        }
+
+        // Positions are the visible frame's; the window rectangle adds invisible borders
+        RECT frame {};
+        RECT window_rect {};
+        if (MONITORINFO info {.cbSize = sizeof(MONITORINFO)}; GetMonitorInfoW(monitor, &info) && GetWindowRect(hwnd, &window_rect) && SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) {
+          const auto width {std::min<LONG>(frame.right - frame.left, work_width)};
+          const auto height {std::min<LONG>(frame.bottom - frame.top, work_height)};
+          const auto left {screen.left + std::clamp<LONG>(frame.left - info.rcWork.left, 0, work_width - width)};
+          const auto top {screen.top + std::clamp<LONG>(frame.top - info.rcWork.top, 0, work_height - height)};
+          const auto border_left {frame.left - window_rect.left};
+          const auto border_top {frame.top - window_rect.top};
+          const auto border_width {(window_rect.right - window_rect.left) - (frame.right - frame.left)};
+          const auto border_height {(window_rect.bottom - window_rect.top) - (frame.bottom - frame.top)};
+          if (!SetWindowPos(hwnd, nullptr, left - border_left, top - border_top, width + border_width, height + border_height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS)) {
+            BOOST_LOG(warning) << "Couldn't move window "sv << reinterpret_cast<std::uintptr_t>(hwnd) << " onto the coherence screen: "sv << GetLastError();
+          }
+        }
+        if (maximized) {
+          ShowWindowAsync(hwnd, SW_MAXIMIZE);
+        }
+      }
+    }
+
+    // Removing the screen alone would leave every gathered window on the primary display
+    void send_windows_home(const coherence_screen_t &screen) {
+      for (const auto &[hwnd, placement] : screen.home) {
+        if (IsWindow(hwnd) && !SetWindowPlacement(hwnd, &placement)) {
+          BOOST_LOG(warning) << "Couldn't put window "sv << reinterpret_cast<std::uintptr_t>(hwnd) << " back where it was: "sv << GetLastError();
+        }
+      }
+    }
   }  // namespace
 
   std::vector<host_window_t> host_windows() {
@@ -330,5 +419,49 @@ namespace platf {
       BOOST_LOG(warning) << "Expected a pinned app named ["sv << id << "], the user has none"sv;
     }
     return launched;
+  }
+
+  std::optional<std::pair<int, int>> coherence_screen(const std::string &client_id, int width, int height) {
+    std::optional<std::pair<int, int>> origin;
+    std::lock_guard lock {coherence_mutex};
+
+    // A client whose free area changed (Dock shown, another screen) gets a screen of the new size;
+    // its windows keep the homes they had before the first one
+    std::map<HWND, WINDOWPLACEMENT> home;
+    auto screen {coherence_screens.find(client_id)};
+    if (screen != coherence_screens.end() && (screen->second.width != width || screen->second.height != height)) {
+      home = std::move(screen->second.home);
+      virtual_display_destroy(screen->second.output_name);
+      coherence_screens.erase(screen);
+      screen = coherence_screens.end();
+    }
+    if (screen == coherence_screens.end() && width > 0 && height > 0) {
+      const auto identity {display_device::virtual_display_identity(client_id, "coherence")};
+      if (const auto output_name {virtual_display_create(width, height + primary_taskbar_height(), coherence_screen_fps, identity)}; !output_name.empty()) {
+        BOOST_LOG(info) << "Coherence screen "sv << output_name << " for a "sv << width << 'x' << height << " client area"sv;
+        screen = coherence_screens.emplace(client_id, coherence_screen_t {output_name, width, height, std::move(home)}).first;
+      }
+    }
+
+    if (screen != coherence_screens.end()) {
+      if (const auto rect {output_rect(screen->second.output_name)}; rect) {
+        origin = std::make_pair(static_cast<int>(rect->left), static_cast<int>(rect->top));
+        for (const auto &window : host_windows()) {
+          gather_window(window_handle(window.id), *rect, width, height, screen->second.home);
+        }
+      } else {
+        BOOST_LOG(warning) << "Expected coherence screen "sv << screen->second.output_name << " on the desktop, it is not"sv;
+      }
+    }
+    return origin;
+  }
+
+  void release_coherence_screen(const std::string &client_id) {
+    std::lock_guard lock {coherence_mutex};
+    if (const auto screen {coherence_screens.find(client_id)}; screen != coherence_screens.end()) {
+      send_windows_home(screen->second);
+      virtual_display_destroy(screen->second.output_name);
+      coherence_screens.erase(screen);
+    }
   }
 }  // namespace platf

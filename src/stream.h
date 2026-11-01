@@ -94,5 +94,13 @@ namespace stream {
      * @return PEM certificate associated with the session's client.
      */
     const std::string &client_cert(session_t &session);
+
+    /**
+     * @brief The output a stream session captures: a display, or host_window_prefix and a window.
+     *
+     * @param session Active streaming session.
+     * @return The session's output name.
+     */
+    const std::string &output_name(session_t &session);
   }  // namespace session
 }  // namespace stream

@@ -680,6 +680,13 @@ namespace platf {
     return false;
   }
 
+  std::optional<std::pair<int, int>> coherence_screen(const std::string & /*client_id*/, int /*width*/, int /*height*/) {
+    return std::nullopt;
+  }
+
+  void release_coherence_screen(const std::string & /*client_id*/) {
+  }
+
   std::vector<host_app_t> pinned_host_apps() {
     return {};
   }
