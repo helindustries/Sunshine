@@ -1697,6 +1697,10 @@ namespace nvhttp {
       status = SimpleWeb::StatusCode::client_error_bad_request;
     } else if (op == "raise") {
       platf::raise_host_window(id);
+    } else if (op == "close") {
+      if (!platf::close_host_window(id)) {
+        status = SimpleWeb::StatusCode::client_error_not_found;
+      }
     } else if (op == "resize") {
       const auto width {std::atoi(get_arg(args, "width", "0").c_str())};
       const auto height {std::atoi(get_arg(args, "height", "0").c_str())};
@@ -2234,12 +2238,18 @@ namespace nvhttp {
     std::jthread tcp {accept_and_run, &http_server};
 
     // A client that dies in coherence mode stops asking for its windows; its screen goes as a
-    // stopping client's would
+    // stopping client's would. Not during a launch, which holds the one HTTPS thread for the
+    // encoder test (22 s on 2026-11-01, minutes on a busy host) so that no list request gets
+    // through, nor while the client streams: a dead client's session ends by its ping timeout
     while (shutdown_event->running() && !shutdown_event->view(coherence_idle_check_interval)) {
-      for (const auto &client : platf::idle_coherence_clients(coherence_idle_timeout)) {
-        BOOST_LOG(info) << "Releasing the coherence screen of a client that stopped asking for its windows"sv;
-        rtsp_stream::terminate_window_sessions(client);
-        platf::release_coherence_screen(client);
+      if (std::unique_lock launch_lock {launch_mutex, std::try_to_lock}; launch_lock.owns_lock() && !rtsp_stream::launch_pending()) {
+        for (const auto &client : platf::idle_coherence_clients(coherence_idle_timeout)) {
+          if (!rtsp_stream::client_streaming(client)) {
+            BOOST_LOG(info) << "Releasing the coherence screen of a client that stopped asking for its windows"sv;
+            rtsp_stream::terminate_window_sessions(client);
+            platf::release_coherence_screen(client);
+          }
+        }
       }
     }
 

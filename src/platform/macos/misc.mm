@@ -599,6 +599,10 @@ namespace platf {
     return {};
   }
 
+  bool close_host_window(std::uint64_t /*id*/) {
+    return false;
+  }
+
   std::vector<host_app_t> pinned_host_apps() {
     return {};
   }

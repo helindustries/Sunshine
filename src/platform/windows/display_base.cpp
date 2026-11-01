@@ -1175,13 +1175,13 @@ namespace platf {
     dxgi::factory1_t reenumeration_factory;
   }  // namespace
 
+  // Also the first session's baseline: startup tested the encoders already, and coherence mode
+  // adds its displays before its first launch, whose test takes minutes on a busy host
   void encoders_unaffected_by_display_change() {
     auto lg = std::scoped_lock(reenumeration_state_lock);
-    if (reenumeration_factory) {
-      reenumeration_factory.reset();
-      if (FAILED(CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &reenumeration_factory))) {
-        reenumeration_factory.release();
-      }
+    reenumeration_factory.reset();
+    if (FAILED(CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &reenumeration_factory))) {
+      reenumeration_factory.release();
     }
   }
 

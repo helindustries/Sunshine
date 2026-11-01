@@ -25,4 +25,12 @@ namespace platf {
    * @return PNG, empty where the window is gone or its program has no icon.
    */
   std::string host_window_icon(std::uint64_t id);
+
+  /**
+   * @brief Ask a host window to close, as its close button does: the program may still ask
+   *        about unsaved work.
+   * @param id Window id from host_windows().
+   * @return Whether the window was there to ask.
+   */
+  bool close_host_window(std::uint64_t id);
 }  // namespace platf

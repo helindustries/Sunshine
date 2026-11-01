@@ -514,8 +514,13 @@ namespace platf {
       return com_ptr_t<IUIAutomation> {automation};
     }
 
+    // Start's search box, apps and user row span its panel's width; other children, like the
+    // scroll viewer of the full app list, reach past the panel
+    constexpr std::array<std::wstring_view, 3> start_panel_parts {L"SearchBoxToggleButton", L"TopLevelRoot", L"UserControl"};
+
     std::optional<RECT> automation_children_bounds(IUIAutomation &automation, HWND hwnd) {
       std::optional<RECT> bounds;
+      std::optional<RECT> start_bounds;
       IUIAutomationElement *element {};
       IUIAutomationCondition *condition {};
       IUIAutomationElementArray *children {};
@@ -537,13 +542,23 @@ namespace platf {
                   } else {
                     bounds = rect;
                   }
+                  if (BSTR id {}; SUCCEEDED(child->get_CurrentAutomationId(&id)) && id != nullptr) {
+                    if (std::ranges::find(start_panel_parts, std::wstring_view {id}) != start_panel_parts.end()) {
+                      if (start_bounds) {
+                        UnionRect(&*start_bounds, &*start_bounds, &rect);
+                      } else {
+                        start_bounds = rect;
+                      }
+                    }
+                    SysFreeString(id);
+                  }
                 }
               }
             }
           }
         }
       }
-      return bounds;
+      return start_bounds ? start_bounds : bounds;
     }
 
     std::optional<RECT> automation_element_bounds(IUIAutomation &automation, HWND hwnd, const wchar_t *automation_id) {
@@ -961,6 +976,11 @@ namespace platf {
       BOOST_LOG(warning) << "Couldn't enumerate the desktop's windows: "sv << GetLastError();
     }
     return windows;
+  }
+
+  bool close_host_window(std::uint64_t id) {
+    const auto hwnd {window_handle(id)};
+    return IsWindow(hwnd) && PostMessageW(hwnd, WM_CLOSE, 0, 0) != FALSE;
   }
 
   void raise_host_window(std::uint64_t id) {
