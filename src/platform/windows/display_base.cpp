@@ -510,6 +510,7 @@ namespace platf::dxgi {
         return -1;
       }
       window_monitor = MonitorFromWindow(capture_window, MONITOR_DEFAULTTONEAREST);
+      capture_window_monitor = window_monitor;
     }
 
     auto adapter_name = utf_utils::from_utf8(config::video.adapter_name);
@@ -1052,8 +1053,7 @@ namespace platf {
    * @param hwdevice_type enables possible use of hardware encoder
    */
   bool dxgi::display_base_t::capture_window_moved() const {
-    RECT bounds {};
-    return capture_window && SUCCEEDED(DwmGetWindowAttribute(capture_window, DWMWA_EXTENDED_FRAME_BOUNDS, &bounds, sizeof(bounds))) && !EqualRect(&bounds, &capture_window_bounds);
+    return capture_window && IsWindow(capture_window) && MonitorFromWindow(capture_window, MONITOR_DEFAULTTONEAREST) != capture_window_monitor;
   }
 
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
@@ -1167,13 +1167,27 @@ namespace platf {
    *
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.
    */
-  bool needs_encoder_reenumeration() {
+  namespace {
     // Serialize access to the static DXGI factory
-    static std::mutex reenumeration_state_lock;
-    auto lg = std::scoped_lock(reenumeration_state_lock);
+    std::mutex reenumeration_state_lock;
 
     // Keep a reference to the DXGI factory, which will keep track of changes internally.
-    static dxgi::factory1_t factory;
+    dxgi::factory1_t reenumeration_factory;
+  }  // namespace
+
+  void encoders_unaffected_by_display_change() {
+    auto lg = std::scoped_lock(reenumeration_state_lock);
+    if (reenumeration_factory) {
+      reenumeration_factory.reset();
+      if (FAILED(CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &reenumeration_factory))) {
+        reenumeration_factory.release();
+      }
+    }
+  }
+
+  bool needs_encoder_reenumeration() {
+    auto lg = std::scoped_lock(reenumeration_state_lock);
+    auto &factory {reenumeration_factory};
     if (!factory || !factory->IsCurrent()) {
       factory.reset();
 

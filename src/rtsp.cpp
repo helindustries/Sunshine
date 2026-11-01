@@ -681,7 +681,7 @@ namespace rtsp_stream {
       auto lg = _session_slots.lock();
       for (auto i = _session_slots->begin(); i != _session_slots->end();) {
         auto &slot = *(*i);
-        if (stream::session::client_cert(slot) == cert && (!windows_only || platf::host_window_id(stream::session::output_name(slot)) != 0)) {
+        if (stream::session::client_cert(slot) == cert && (!windows_only || platf::coherence_output(stream::session::output_name(slot)))) {
           stream::session::stop(slot);
           stream::session::join(slot);
           i = _session_slots->erase(i);

@@ -105,6 +105,8 @@ list(PREPEND PLATFORM_LIBRARIES
         libwinpthread.a
         minhook::minhook
         ntdll
+        ole32
+        oleaut32
         setupapi
         shlwapi
         synchronization.lib

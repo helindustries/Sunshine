@@ -101,6 +101,7 @@ namespace rtsp_stream {
     std::string client_cert;  ///< PEM certificate for the paired Moonlight client.
     std::string profile_id;  ///< Artemis stream profile (profileId); its virtual display is only reused for the same profile.
     std::uint64_t window_id {};  ///< Host window the session streams on its own (windowId, coherence mode); 0 for a display.
+    bool coherence_atlas {};  ///< Streams the client's coherence atlas (coherenceAtlas): all its windows in one picture.
     std::string output_name;  ///< Virtual display acquired for this launch; empty captures the configured display.
     bool virtual_display_requested {};  ///< Client asked for a virtual display (Apollo's virtualDisplay=1), whatever the config says.
     int scale_factor {100};  ///< Virtual display size in percent of the stream size (Apollo's scaleFactor).

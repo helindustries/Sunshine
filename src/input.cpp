@@ -328,6 +328,7 @@ namespace input {
     int32_t accumulated_hscroll_delta {};  ///< Accumulated hscroll delta.
 
     std::uint64_t window_id {};  ///< Host window this stream drives (coherence mode), raised on presses; 0 for none.
+    std::string output_name;  ///< What the stream captures.
   };
 
   /**
@@ -902,6 +903,25 @@ namespace input {
 
     auto width = (float) util::endian::big(packet->width);
     auto height = (float) util::endian::big(packet->height);
+
+    // A coherence client sends its pointer on its free screen areas, which are the work areas of
+    // the coherence screens: the window's own rectangle moves while the window is dragged, and a
+    // pointer mapped onto it would drag the window further
+    std::optional<std::pair<float, float>> coherence_point;
+    if (input->window_id != 0) {
+      if (const auto area {platf::host_window_work_area(input->window_id)}; area) {
+        coherence_point = std::make_pair(area->x + std::clamp(x, 0.0f, width) * area->width / width, area->y + std::clamp(y, 0.0f, height) * area->height / height);
+      }
+    } else {
+      coherence_point = platf::coherence_input_point(input->output_name, x, y, width, height);
+    }
+    if (coherence_point) {
+      refresh_touch_port(input);
+      if (input->touch_port) {
+        platf::abs_mouse(platf_input, platform_touch_port(input->touch_port), coherence_point->first, coherence_point->second);
+      }
+      return;
+    }
 
     auto tpcoords = client_to_touchport(input, {x, y}, {width, height});
     if (!tpcoords) {
@@ -2439,7 +2459,7 @@ namespace input {
   /**
    * @brief Allocate and initialize platform input state for a stream.
    */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, std::uint64_t window_id) {
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, const std::string &output_name) {
     std::shared_ptr<input_t> input;
     bool resumed = false;
     {
@@ -2457,7 +2477,8 @@ namespace input {
         state.inputs.try_emplace(std::move(session_id), input);
       }
     }
-    input->window_id = window_id;
+    input->window_id = platf::host_window_id(output_name);
+    input->output_name = output_name;
 
     if (resumed) {
       dispatch_input_task([input, mail = std::move(mail)]() {

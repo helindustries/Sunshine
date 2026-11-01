@@ -358,10 +358,13 @@ namespace platf::dxgi {
 
     HWND capture_window {};  ///< Window a window capture (output name "window:<id>") follows; null for a monitor.
     RECT capture_window_bounds {};  ///< The window's bounds the offsets were taken from.
+    HMONITOR capture_window_monitor {};  ///< The display the window was on at init, whose device captures it.
 
     /**
-     * @brief Whether the captured window moved since init, which leaves absolute input mapped to its old place.
-     * @return True for a window capture whose bounds changed, false for a monitor.
+     * @brief Whether the captured window went to another display since init. A move on the same
+     *        display needs nothing: capture follows the window, and coherence input maps onto the
+     *        display, not the window.
+     * @return True for a window capture now on another display, false for a monitor.
      */
     [[nodiscard]] bool capture_window_moved() const;
 

@@ -64,6 +64,7 @@
 #include "src/entry_handler.h"
 #include "src/globals.h"
 #include "src/logging.h"
+#include "src/platform/coherence.h"
 #include "src/platform/common.h"
 #include "src/platform/permissions.h"
 #include "vaapi.h"
@@ -676,15 +677,51 @@ namespace platf {
   void raise_host_window(std::uint64_t /*id*/) {
   }
 
-  bool resize_host_window(std::uint64_t /*id*/, int /*width*/, int /*height*/) {
+  bool resize_host_window(std::uint64_t /*id*/, int /*width*/, int /*height*/, std::optional<std::pair<int, int>> /*position*/) {
     return false;
   }
 
-  std::optional<std::pair<int, int>> coherence_screen(const std::string & /*client_id*/, int /*width*/, int /*height*/) {
+  std::optional<host_rect_t> host_window_work_area(std::uint64_t /*id*/) {
     return std::nullopt;
   }
 
+  std::optional<host_rect_t> host_window_position(std::uint64_t /*id*/) {
+    return std::nullopt;
+  }
+
+  bool coherence_screens(const std::string & /*client_id*/, const std::vector<host_rect_t> & /*screens*/) {
+    return false;
+  }
+
   void release_coherence_screen(const std::string & /*client_id*/) {
+  }
+
+  std::pair<int, int> coherence_client_point(const std::string & /*client_id*/, int x, int y) {
+    return {x, y};
+  }
+
+  std::optional<std::pair<int, int>> coherence_host_point(const std::string & /*client_id*/, int /*x*/, int /*y*/) {
+    return std::nullopt;
+  }
+
+  std::optional<coherence_atlas_t> coherence_atlas(const std::string & /*client_id*/) {
+    return std::nullopt;
+  }
+
+  std::optional<std::pair<float, float>> coherence_input_point(const std::string & /*output_name*/, float /*x*/, float /*y*/, float /*width*/, float /*height*/) {
+    return std::nullopt;
+  }
+
+  std::vector<std::string> idle_coherence_clients(std::chrono::seconds /*timeout*/) {
+    return {};
+  }
+
+  bool open_coherence_start_menu(const std::string & /*client_id*/) {
+    return false;
+  }
+
+  std::string host_window_icon(std::uint64_t /*id*/) {
+    return {};
   }
 
   std::vector<host_app_t> pinned_host_apps() {

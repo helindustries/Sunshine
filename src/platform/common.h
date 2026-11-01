@@ -7,6 +7,7 @@
 // standard includes
 #include <bitset>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -1405,27 +1406,132 @@ namespace platf {
    * @param id Window id from host_windows().
    * @param width Width as captured, in pixels.
    * @param height Height as captured, in pixels.
+   * @param position Where its frame goes, relative to the work area of its display; nullopt
+   *                 keeps its place.
    * @return Whether the window took the size.
    */
-  bool resize_host_window(std::uint64_t id, int width, int height);
+  bool resize_host_window(std::uint64_t id, int width, int height, std::optional<std::pair<int, int>> position = std::nullopt);
 
   /**
-   * @brief Coherence mode's screen for a client: a virtual display holding the windows it
-   *        mirrors, the client's free screen area with the host's taskbar below it, so a
-   *        window maximized there fills exactly that area. Windows on other displays are moved
-   *        onto it, keeping their place in their work area as far as it fits.
-   * @param client_id Paired client the screen belongs to; one screen per client.
-   * @param width Width of the client's free screen area, in pixels.
-   * @param height Height of the client's free screen area, in pixels.
-   * @return The screen's top-left corner on the host desktop, nullopt where none could be made.
+   * @brief A rectangle on the host desktop, in pixels.
    */
-  std::optional<std::pair<int, int>> coherence_screen(const std::string &client_id, int width, int height);
+  struct host_rect_t {
+    int x;  ///< Left edge.
+    int y;  ///< Top edge.
+    int width;  ///< Width.
+    int height;  ///< Height.
+  };
 
   /**
-   * @brief Remove a client's coherence screen; the system moves its windows to another display.
-   * @param client_id Paired client the screen belongs to.
+   * @brief The work area of the display a host window is on: on its coherence screen, the client's
+   *        free screen area, which coherence mode maps the client's pointer onto.
+   * @param id Window id from host_windows().
+   * @return The work area, nullopt for a window that is gone or where windows cannot be captured.
+   */
+  std::optional<host_rect_t> host_window_work_area(std::uint64_t id);
+
+  /**
+   * @brief Where a host window is in the work area of its display (its visible frame).
+   * @param id Window id from host_windows().
+   * @return The frame relative to the work area's top-left, nullopt for a window that is gone.
+   */
+  std::optional<host_rect_t> host_window_position(std::uint64_t id);
+
+  /**
+   * @brief Coherence mode's screens for a client: a virtual display per client screen holding
+   *        the windows it mirrors, the screen's free area with the host's taskbar below it, so a
+   *        window maximized there fills exactly that area, arranged as the client's screens are.
+   *        Windows on other displays are moved onto the first, keeping their place in their work
+   *        area as far as it fits.
+   * @param client_id Paired client the screens belong to.
+   * @param screens The client screens' free areas in pixels, relative to the top-left of all of
+   *                them, its primary first.
+   * @return Whether the screens are there.
+   */
+  bool coherence_screens(const std::string &client_id, const std::vector<host_rect_t> &screens);
+
+  /**
+   * @brief Remove a client's coherence screens; the system moves its windows to another display.
+   * @param client_id Paired client the screens belong to.
    */
   void release_coherence_screen(const std::string &client_id);
+
+  /**
+   * @brief Where a point of the host desktop is on a client's screens: a point on a coherence
+   *        screen maps from its work area to that client screen's free area.
+   * @param client_id Paired client the screens belong to.
+   * @param x Host desktop x.
+   * @param y Host desktop y.
+   * @return The point relative to the client's screens; one on no coherence screen is taken as
+   *         relative to the first.
+   */
+  std::pair<int, int> coherence_client_point(const std::string &client_id, int x, int y);
+
+  /**
+   * @brief Where a point of a client's screens is on the host desktop, the reverse of
+   *        coherence_client_point(); a point on no client screen goes to the nearest.
+   * @param client_id Paired client the screens belong to.
+   * @param x X relative to the client's screens.
+   * @param y Y relative to the client's screens.
+   * @return The host desktop point, nullopt when the client has no coherence screens.
+   */
+  std::optional<std::pair<int, int>> coherence_host_point(const std::string &client_id, int x, int y);
+
+  /**
+   * @brief Where one window of a coherence screen is drawn in its atlas.
+   */
+  struct atlas_region_t {
+    std::uint64_t id;  ///< Platform window handle.
+    host_rect_t screen;  ///< The window's frame relative to the client's screens.
+    host_rect_t atlas;  ///< Its picture in the atlas; smaller than the frame when the atlas is full.
+    bool popup;  ///< A menu, tooltip or other untitled window, which host_windows() leaves out.
+  };
+
+  /**
+   * @brief A coherence screen's atlas: a display of its own showing every window on the screen
+   *        side by side, whole even where others cover it, which a client streams as one picture.
+   */
+  struct coherence_atlas_t {
+    std::string output_name;  ///< The atlas display, which a coherence session captures.
+    int width;  ///< Atlas width in pixels.
+    int height;  ///< Atlas height in pixels.
+    std::vector<atlas_region_t> regions;  ///< The windows drawn, front to back.
+  };
+
+  /**
+   * @brief The atlas of a client's coherence screen, made with the screen.
+   * @param client_id Paired client the screen belongs to.
+   * @return The atlas, nullopt when the client has no coherence screen.
+   */
+  std::optional<coherence_atlas_t> coherence_atlas(const std::string &client_id);
+
+  /**
+   * @brief Where a coherence atlas session's pointer goes: the client sends it on all its
+   *        screens together, and it lands on the coherence screen of the client screen it is on.
+   * @param output_name A session's output name.
+   * @param x Pointer x, 0 to width.
+   * @param y Pointer y, 0 to height.
+   * @param width The client's reference width, all its screens.
+   * @param height The client's reference height.
+   * @return The host desktop point, nullopt for an output that is no coherence atlas.
+   */
+  std::optional<std::pair<float, float>> coherence_input_point(const std::string &output_name, float x, float y, float width, float height);
+
+  /**
+   * @brief Clients whose coherence screen has not been asked for within a timeout: a client that
+   *        dies leaves its screen behind.
+   * @param timeout Time since the last coherence_screens() call.
+   * @return The clients' ids.
+   */
+  std::vector<std::string> idle_coherence_clients(std::chrono::seconds timeout);
+
+  /**
+   * @brief Whether a session streams coherence mode: one window, or a coherence screen's atlas.
+   * @param output_name A session's output name.
+   */
+  inline bool coherence_output(const std::string &output_name) {
+    return host_window_id(output_name) != 0 || coherence_input_point(output_name, 0, 0, 1, 1).has_value();
+  }
 
   /**
    * @brief An app the host's user pinned, which a client can start in coherence mode.

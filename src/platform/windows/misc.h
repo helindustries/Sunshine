@@ -27,6 +27,13 @@ namespace platf {
   bool console_awaits_sign_in();
 
   /**
+   * @brief Tell the next session's encoder check that the displays just added or removed leave
+   *        the encoders as they were, as virtual displays on the same adapter do: any display
+   *        change otherwise makes it test every encoder again, minutes on a busy host.
+   */
+  void encoders_unaffected_by_display_change();
+
+  /**
    * @brief The console user's token, elevated if requested and the user is an admin.
    * @param elevated Whether the token should carry the user's admin rights.
    * @return The token, which the caller closes; nullptr when nobody is logged on.

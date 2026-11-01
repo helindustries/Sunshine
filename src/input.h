@@ -81,10 +81,11 @@ namespace input {
    * @param mail Mailbox used to exchange messages with worker threads.
    * @param session_id Paired-client identity followed by the stream's output name, shared by the
    *                   launch and resume connections of that stream; simultaneous streams differ.
-   * @param window_id Host window the stream drives (coherence mode), raised on input; 0 for none.
+   * @param output_name What the stream captures: in coherence mode a host window, raised on
+   *                    input, or a coherence atlas, whose screen the pointer is mapped onto.
    * @return Shared input state bound to the stream mailbox.
    */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, std::uint64_t window_id = 0);
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, const std::string &output_name = {});
 
 #ifdef SUNSHINE_TESTS
   namespace testing {

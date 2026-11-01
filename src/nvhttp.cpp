@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <format>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -32,6 +33,7 @@
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
+#include "platform/coherence.h"
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
@@ -49,6 +51,10 @@ namespace nvhttp {
 
   namespace fs = std::filesystem;
   namespace pt = boost::property_tree;
+
+  // A coherence client polls its windows several times a second while it runs
+  constexpr auto coherence_idle_timeout {30s};
+  constexpr auto coherence_idle_check_interval {5s};
 
   crypto::cert_chain_t cert_chain;  ///< Enabled paired-client certificates accepted by Sunshine's GameStream HTTPS server.
 
@@ -536,6 +542,7 @@ namespace nvhttp {
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
     launch_session->profile_id = get_arg(args, "profileId", "");
     launch_session->window_id = std::strtoull(get_arg(args, "windowId", "0").c_str(), nullptr, 10);
+    launch_session->coherence_atlas = util::from_view(get_arg(args, "coherenceAtlas", "0"));
     launch_session->virtual_display_requested = util::from_view(get_arg(args, "virtualDisplay", "0"));
     launch_session->scale_factor = std::clamp((int) util::from_view(get_arg(args, "scaleFactor", "100")), 20, 400);
 
@@ -1405,11 +1412,23 @@ namespace nvhttp {
 
   /**
    * @brief What a launching or resuming session captures.
-   * @param session The session, with the client's windowId and mode.
-   * @return The window it asked for (coherence mode), else a virtual display of its own.
+   * @param session The session, with the client's windowId, coherenceAtlas and mode.
+   * @return The window or the coherence atlas it asked for, else a virtual display of its own.
    */
   std::string session_output_name(const rtsp_stream::launch_session_t &session) {
-    return session.window_id != 0 ? std::string {platf::host_window_prefix} + std::to_string(session.window_id) : display_device::acquire_virtual_display(config::video, session);
+    std::string output_name;
+    if (session.coherence_atlas) {
+      if (const auto atlas {platf::coherence_atlas(session.client_cert)}; atlas) {
+        output_name = atlas->output_name;
+      } else {
+        BOOST_LOG(warning) << "Expected a coherence screen for the client streaming its atlas, it has none: it asks for /windows with its screen size first"sv;
+      }
+    } else if (session.window_id != 0) {
+      output_name = std::string {platf::host_window_prefix} + std::to_string(session.window_id);
+    } else {
+      output_name = display_device::acquire_virtual_display(config::video, session);
+    }
+    return output_name;
   }
 
   /**
@@ -1437,32 +1456,128 @@ namespace nvhttp {
     } else {
       root.put("<xmlattr>.status_code", 200);
 
-      // Coherence mode sends the client's free screen area: the windows gather on a screen of
-      // that size, and their positions are relative to it
+      // Coherence mode sends the free area of each client screen (screens=x,y,w,h;..., relative
+      // to all of them, its primary first; older clients send screenWidth and screenHeight):
+      // the windows gather on screens of those sizes, and their positions are relative to them
       const auto args {request->parse_query_string()};
-      const auto screen_width {std::atoi(get_arg(args, "screenWidth", "0").c_str())};
-      const auto screen_height {std::atoi(get_arg(args, "screenHeight", "0").c_str())};
-      auto origin {std::make_pair(0, 0)};
-      if (screen_width > 0 && screen_height > 0) {
-        if (const auto screen_origin {platf::coherence_screen(last_verified_client_cert, screen_width, screen_height)}; screen_origin) {
-          origin = *screen_origin;
-          root.put("ScreenWidth", screen_width);
-          root.put("ScreenHeight", screen_height);
+      std::vector<platf::host_rect_t> screens;
+      std::istringstream screen_list {get_arg(args, "screens", "")};
+      for (std::string screen; std::getline(screen_list, screen, ';');) {
+        std::istringstream values {screen};
+        platf::host_rect_t rect {};
+        auto separator {','};
+        if (values >> rect.x >> separator >> rect.y >> separator >> rect.width >> separator >> rect.height) {
+          screens.push_back(rect);
+        }
+      }
+      if (const auto width {std::atoi(get_arg(args, "screenWidth", "0").c_str())}, height {std::atoi(get_arg(args, "screenHeight", "0").c_str())}; screens.empty() && width > 0 && height > 0) {
+        screens.push_back({0, 0, width, height});
+      }
+
+      auto on_screens {false};
+      std::optional<platf::coherence_atlas_t> atlas;
+      if (!screens.empty() && platf::coherence_screens(last_verified_client_cert, screens)) {
+        on_screens = true;
+        auto right {0};
+        auto bottom {0};
+        for (const auto &screen : screens) {
+          right = std::max(right, screen.x + screen.width);
+          bottom = std::max(bottom, screen.y + screen.height);
+        }
+        root.put("ScreenWidth", right);
+        root.put("ScreenHeight", bottom);
+        if ((atlas = platf::coherence_atlas(last_verified_client_cert))) {
+          root.put("AtlasWidth", atlas->width);
+          root.put("AtlasHeight", atlas->height);
+        }
+      }
+
+      const auto put_atlas_region {[&atlas](pt::ptree &node, std::uint64_t id) {
+        if (atlas) {
+          if (const auto region {std::ranges::find(atlas->regions, id, &platf::atlas_region_t::id)}; region != atlas->regions.end()) {
+            node.put("AtlasX", region->atlas.x);
+            node.put("AtlasY", region->atlas.y);
+            node.put("AtlasWidth", region->atlas.width);
+            node.put("AtlasHeight", region->atlas.height);
+          }
+        }
+      }};
+
+      // Menus, tooltips and other popups on the coherence screen come first, the front-most
+      if (atlas) {
+        for (const auto &region : atlas->regions) {
+          if (region.popup) {
+            pt::ptree node;
+            node.put("ID", region.id);
+            node.put("Title", "");
+            node.put("Process", "");
+            node.put("X", region.screen.x);
+            node.put("Y", region.screen.y);
+            node.put("Width", region.screen.width);
+            node.put("Height", region.screen.height);
+            node.put("Minimized", 0);
+            node.put("Popup", 1);
+            put_atlas_region(node, region.id);
+            root.push_back(std::make_pair("Window", node));
+          }
         }
       }
 
       for (const auto &window : platf::host_windows()) {
+        // Start and Search are titled windows the atlas shows as popups, listed above
+        if (atlas && std::ranges::any_of(atlas->regions, [&window](const platf::atlas_region_t &region) {
+              return region.popup && region.id == window.id;
+            })) {
+          continue;
+        }
         pt::ptree node;
         node.put("ID", window.id);
         node.put("Title", window.title);
         node.put("Process", window.process);
-        node.put("X", window.x - origin.first);
-        node.put("Y", window.y - origin.second);
+        const auto [x, y] {on_screens ? platf::coherence_client_point(last_verified_client_cert, window.x, window.y) : std::make_pair(window.x, window.y)};
+        node.put("X", x);
+        node.put("Y", y);
         node.put("Width", window.width);
         node.put("Height", window.height);
         node.put("Minimized", window.minimized ? 1 : 0);
+        put_atlas_region(node, window.id);
         root.push_back(std::make_pair("Window", node));
       }
+    }
+  }
+
+  /**
+   * @brief One host window's place on its display, which a coherence window asks for many times a
+   *        second while it is dragged, instead of the whole window list.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void window_position(resp_https_t response, req_https_t request) {
+    pt::ptree tree;
+    auto g = util::fail_guard([&tree, &response]() {
+      std::ostringstream data;
+
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+    });
+
+    auto &root = tree.add_child("root", pt::ptree {});
+    const auto args {request->parse_query_string()};
+    const auto id {std::strtoull(get_arg(args, "id", "0").c_str(), nullptr, 10)};
+    if ((client_permissions(last_verified_client_cert) & permission::list) != permission::list) {
+      root.put("<xmlattr>.status_code", 401);
+      root.put("<xmlattr>.status_message", "This client may not list the host's windows");
+    } else if (const auto position {platf::host_window_position(id)}; position) {
+      root.put("<xmlattr>.status_code", 200);
+      root.put("X", position->x);
+      root.put("Y", position->y);
+      root.put("Width", position->width);
+      root.put("Height", position->height);
+    } else {
+      root.put("<xmlattr>.status_code", 404);
+      root.put("<xmlattr>.status_message", "No such window");
     }
   }
 
@@ -1505,6 +1620,27 @@ namespace nvhttp {
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
    */
+  /**
+   * @brief The icon of a host window's program, which a coherence client shows the window under.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void window_icon(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    auto status {SimpleWeb::StatusCode::success_ok};
+    std::string png;
+    if ((client_permissions(last_verified_client_cert) & permission::list) != permission::list) {
+      status = SimpleWeb::StatusCode::client_error_unauthorized;
+    } else if (png = platf::host_window_icon(std::strtoull(get_arg(request->parse_query_string(), "id", "0").c_str(), nullptr, 10)); png.empty()) {
+      status = SimpleWeb::StatusCode::client_error_not_found;
+    }
+
+    response->write(status, png, {{"Content-Type", status == SimpleWeb::StatusCode::success_ok ? "image/png" : "text/plain"}});
+    response->close_connection_after_response = true;
+  }
+
   void pinned_app_icon(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -1542,7 +1678,8 @@ namespace nvhttp {
 
   /**
    * @brief Coherence mode's window actions: op=raise brings a host window to the front (restoring
-   *        it when minimized), op=resize gives it the size its client window was given.
+   *        it when minimized), op=resize gives it the size its client window was given, and with
+   *        x and y (relative to its work area) the place too, as a resize by the left or top edge.
    *
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
@@ -1563,7 +1700,18 @@ namespace nvhttp {
     } else if (op == "resize") {
       const auto width {std::atoi(get_arg(args, "width", "0").c_str())};
       const auto height {std::atoi(get_arg(args, "height", "0").c_str())};
-      if (!platf::resize_host_window(id, width, height)) {
+      std::optional<std::pair<int, int>> position;
+      // A coherence client's position is on its screens; the window's work area is that of the
+      // display it is on now
+      if (const auto x {get_arg(args, "x", "")}, y {get_arg(args, "y", "")}; !x.empty() && !y.empty()) {
+        position = std::make_pair(std::atoi(x.c_str()), std::atoi(y.c_str()));
+        if (const auto host {platf::coherence_host_point(last_verified_client_cert, position->first, position->second)}; host) {
+          if (const auto area {platf::host_window_work_area(id)}; area) {
+            position = std::make_pair(host->first - area->x, host->second - area->y);
+          }
+        }
+      }
+      if (!platf::resize_host_window(id, width, height, position)) {
         status = SimpleWeb::StatusCode::client_error_not_found;
       }
     } else {
@@ -1575,8 +1723,9 @@ namespace nvhttp {
   }
 
   /**
-   * @brief Coherence mode's end for a client: its coherence screen goes, and with it the windows
-   *        go back to the host's own displays.
+   * @brief Coherence mode's actions for a client: op=stop ends it, its coherence screen goes and
+   *        with it the windows go back to the host's own displays; op=startmenu opens the Start
+   *        menu on its coherence screen.
    *
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
@@ -1593,6 +1742,10 @@ namespace nvhttp {
       // capture whose display vanishes never stops, and the hang check kills the server
       rtsp_stream::terminate_window_sessions(last_verified_client_cert);
       platf::release_coherence_screen(last_verified_client_cert);
+    } else if (get_arg(args, "op", "") == "startmenu") {
+      if (!platf::open_coherence_start_menu(last_verified_client_cert)) {
+        status = SimpleWeb::StatusCode::client_error_not_found;
+      }
     } else {
       status = SimpleWeb::StatusCode::client_error_bad_request;
     }
@@ -2029,6 +2182,8 @@ namespace nvhttp {
     };
     https_server.resource["^/applist$"]["GET"] = applist;
     https_server.resource["^/windows$"]["GET"] = windows;
+    https_server.resource["^/windows/position$"]["GET"] = window_position;
+    https_server.resource["^/windows/icon$"]["GET"] = window_icon;
     https_server.resource["^/pinnedapps$"]["GET"] = pinned_apps;
     https_server.resource["^/pinnedapps/icon$"]["GET"] = pinned_app_icon;
     https_server.resource["^/actions/launch$"]["GET"] = launch_pinned_app;
@@ -2078,8 +2233,15 @@ namespace nvhttp {
     std::jthread ssl {accept_and_run, &https_server};
     std::jthread tcp {accept_and_run, &http_server};
 
-    // Wait for any event
-    shutdown_event->view();
+    // A client that dies in coherence mode stops asking for its windows; its screen goes as a
+    // stopping client's would
+    while (shutdown_event->running() && !shutdown_event->view(coherence_idle_check_interval)) {
+      for (const auto &client : platf::idle_coherence_clients(coherence_idle_timeout)) {
+        BOOST_LOG(info) << "Releasing the coherence screen of a client that stopped asking for its windows"sv;
+        rtsp_stream::terminate_window_sessions(client);
+        platf::release_coherence_screen(client);
+      }
+    }
 
     https_server.stop();
     http_server.stop();
