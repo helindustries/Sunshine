@@ -784,6 +784,15 @@ namespace platf {
     // fit at a larger scale, which no window leaving would show
     constexpr int atlas_growth_updates {coherence_screen_fps};
 
+    // Start and Search hold the foreground (Search's box, also with Start alone) while open.
+    // Start stays uncloaked through its closing animation, drawn without its backdrop, which
+    // the client would show as a dark panel for a frame or two
+    bool shell_panel_in_front() {
+      std::array<wchar_t, 64> class_name {};
+      const auto foreground {GetForegroundWindow()};
+      return foreground != nullptr && GetClassNameW(foreground, class_name.data(), static_cast<int>(class_name.size())) > 0 && std::wstring_view {class_name.data()} == shell_panel_class;
+    }
+
     BOOL CALLBACK collect_atlas_source(HWND hwnd, LPARAM scan_param) {
       auto &scan {*reinterpret_cast<atlas_scan_t *>(scan_param)};
       std::array<wchar_t, 64> class_name {};
@@ -803,14 +812,15 @@ namespace platf {
         GetWindowRect(hwnd, &window_rect) && SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) &&
         frame.right > frame.left && frame.bottom > frame.top
       ) {
-        const auto shell_panel {std::wstring_view {class_name.data()} == shell_panel_class};
-        scan.sources.push_back({
-          hwnd,
-          frame,
-          RECT {frame.left - window_rect.left, frame.top - window_rect.top, frame.right - window_rect.left, frame.bottom - window_rect.top},
-          shell_panel || (ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) != 0 || GetWindowTextLengthW(hwnd) == 0,
-          shell_panel,
-        });
+        if (const auto shell_panel {std::wstring_view {class_name.data()} == shell_panel_class}; !shell_panel || shell_panel_in_front()) {
+          scan.sources.push_back({
+            hwnd,
+            frame,
+            RECT {frame.left - window_rect.left, frame.top - window_rect.top, frame.right - window_rect.left, frame.bottom - window_rect.top},
+            shell_panel || (ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) != 0 || GetWindowTextLengthW(hwnd) == 0,
+            shell_panel,
+          });
+        }
       }
       return TRUE;
     }
