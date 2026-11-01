@@ -1074,6 +1074,9 @@ namespace display_device {
         }
       }
     }
+    if (!output_name.empty()) {
+      platf::claim_primary_display(output_name);
+    }
     return output_name;
   }
 
@@ -1081,6 +1084,7 @@ namespace display_device {
     std::lock_guard lock {virtual_screens_mutex};
     if (auto screen = std::ranges::find(virtual_screens, output_name, &virtual_screen_t::output_name); screen != virtual_screens.end()) {
       screen->in_use = false;
+      platf::release_primary_display(output_name);
     }
   }
 
@@ -1099,6 +1103,7 @@ namespace display_device {
     std::lock_guard lock {virtual_screens_mutex};
     for (const auto &screen : virtual_screens) {
       BOOST_LOG(info) << "Destroying virtual display "sv << screen.output_name;
+      platf::release_primary_display(screen.output_name);
       platf::virtual_display_destroy(screen.output_name);
     }
     virtual_screens.clear();

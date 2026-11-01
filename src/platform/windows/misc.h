@@ -7,6 +7,7 @@
 // standard includes
 #include <chrono>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <string_view>
 
@@ -25,6 +26,17 @@ namespace platf {
    *        primary display only.
    */
   bool console_awaits_sign_in();
+
+  /**
+   * @brief The primary display's output name, empty when there is none.
+   */
+  std::string primary_display();
+
+  /**
+   * @brief Move displays to the desktop positions given, by output name; the others stay.
+   * @return Whether Windows took the arrangement.
+   */
+  bool move_displays(const std::map<std::string, POINTL> &positions);
 
   /**
    * @brief Tell the next session's encoder check that the displays just added or removed leave

@@ -32,6 +32,7 @@ extern "C" {
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
+#include "platform/coherence.h"
 #include "platform/common.h"
 #include "platform/virtualhid_input.h"
 #include "thread_pool.h"
@@ -329,6 +330,7 @@ namespace input {
 
     std::uint64_t window_id {};  ///< Host window this stream drives (coherence mode), raised on presses; 0 for none.
     std::string output_name;  ///< What the stream captures.
+    std::optional<std::pair<float, float>> last_coherence_point;  ///< Where a coherence client's pointer went last.
   };
 
   /**
@@ -915,11 +917,19 @@ namespace input {
     } else {
       coherence_point = platf::coherence_input_point(input->output_name, x, y, width, height);
     }
+    // A program that hides the pointer, as a 3D viewport does while a button is held, reads
+    // relative motion and keeps putting the pointer back: the move since the last point goes
+    // as such
     if (coherence_point) {
-      refresh_touch_port(input);
-      if (input->touch_port) {
-        platf::abs_mouse(platf_input, platform_touch_port(input->touch_port), coherence_point->first, coherence_point->second);
+      if (platf::host_cursor_hidden() && input->last_coherence_point) {
+        platf::move_mouse(platf_input, static_cast<int>(std::lround(coherence_point->first - input->last_coherence_point->first)), static_cast<int>(std::lround(coherence_point->second - input->last_coherence_point->second)));
+      } else {
+        refresh_touch_port(input);
+        if (const auto [origin_x, origin_y] {platf::desktop_origin()}; input->touch_port) {
+          platf::abs_mouse(platf_input, platform_touch_port(input->touch_port), coherence_point->first - origin_x, coherence_point->second - origin_y);
+        }
       }
+      input->last_coherence_point = coherence_point;
       return;
     }
 

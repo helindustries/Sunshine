@@ -1343,6 +1343,20 @@ namespace platf {
   void virtual_display_destroy(const std::string &output_name);
 
   /**
+   * @brief Make a streamed display primary, where Windows shows UAC prompts, new windows and
+   *        dialogs. The newest claim holds; after the last is released, the display that was
+   *        primary before the first is again. A no-op where the platform has no primary display.
+   * @param output_name The display's output name.
+   */
+  void claim_primary_display(const std::string &output_name);
+
+  /**
+   * @brief Release a claim_primary_display(), before or after the display is gone.
+   * @param output_name The display's output name.
+   */
+  void release_primary_display(const std::string &output_name);
+
+  /**
    * @brief Read the host clipboard as text.
    * @return UTF-8 text, empty when the clipboard holds no text or the platform has no clipboard.
    */

@@ -15,10 +15,12 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <functional>
 #include <mutex>
 #include <set>
 #include <string>
 #include <thread>
+#include <vector>
 
 // local includes
 #include "src/config.h"
@@ -145,39 +147,55 @@ namespace platf {
     }
 
     /**
+     * @brief Move the active displays in one SetDisplayConfig: ChangeDisplaySettingsExW fails with
+     *        DISP_CHANGE_FAILED for SudoVDA displays. Not saved to the database, where Windows
+     *        would take a virtual display's place, primary too, whenever it reappears.
+     * @param place A display's new position by its device name and current position.
+     * @return The SetDisplayConfig status.
+     */
+    LONG move_active_displays(const std::function<POINTL(const std::wstring &, POINTL)> &place) {
+      UINT32 path_count = 0;
+      UINT32 mode_count = 0;
+      auto status = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count);
+      std::vector<DISPLAYCONFIG_PATH_INFO> paths(path_count);
+      std::vector<DISPLAYCONFIG_MODE_INFO> modes(mode_count);
+      if (status == ERROR_SUCCESS) {
+        status = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths.data(), &mode_count, modes.data(), nullptr);
+      }
+      for (UINT32 index = 0; status == ERROR_SUCCESS && index < path_count; ++index) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source {};
+        source.header = {DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, sizeof(source), paths[index].sourceInfo.adapterId, paths[index].sourceInfo.id};
+        if (const auto mode_index = paths[index].sourceInfo.modeInfoIdx; mode_index < mode_count && DisplayConfigGetDeviceInfo(&source.header) == ERROR_SUCCESS) {
+          auto &position = modes[mode_index].sourceMode.position;
+          position = place(source.viewGdiDeviceName, position);
+        }
+      }
+      if (status == ERROR_SUCCESS) {
+        status = SetDisplayConfig(path_count, paths.data(), mode_count, modes.data(), SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES);
+      }
+      return status;
+    }
+
+    /**
      * @brief Make a display the primary one, keeping the arrangement of the others around it.
-     * @details The primary display is the one at 0,0, so every attached display moves by the new
-     *          primary's offset; the changes are staged and applied together.
+     * @details The primary display is the one at 0,0, so every display moves by its offset.
      */
     void make_primary(const wchar_t *device_name) {
       DEVMODEW mode {};
       mode.dmSize = sizeof(mode);
-      if (EnumDisplaySettingsW(device_name, ENUM_CURRENT_SETTINGS, &mode)) {
-        const auto offset = mode.dmPosition;
-        DISPLAY_DEVICEW device {};
-        device.cb = sizeof(device);
-        for (DWORD index = 0; EnumDisplayDevicesW(nullptr, index, &device, 0); ++index) {
-          if ((device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) && wcscmp(device.DeviceName, device_name) != 0) {
-            DEVMODEW other {};
-            other.dmSize = sizeof(other);
-            if (EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS, &other)) {
-              other.dmPosition.x -= offset.x;
-              other.dmPosition.y -= offset.y;
-              other.dmFields = DM_POSITION;
-              ChangeDisplaySettingsExW(device.DeviceName, &other, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
-            }
-          }
-          device.cb = sizeof(device);
-        }
-        mode.dmPosition = {0, 0};
-        mode.dmFields = DM_POSITION;
-        const auto staged = ChangeDisplaySettingsExW(device_name, &mode, nullptr, CDS_SET_PRIMARY | CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
-        const auto applied = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
-        if (staged != DISP_CHANGE_SUCCESSFUL || applied != DISP_CHANGE_SUCCESSFUL) {
-          BOOST_LOG(warning) << "SudoVDA: couldn't make the new display primary ("sv << staged << ", "sv << applied << ')';
-        }
+      if (!EnumDisplaySettingsW(device_name, ENUM_CURRENT_SETTINGS, &mode)) {
+        BOOST_LOG(warning) << "Couldn't make display "sv << utf_utils::to_utf8(device_name) << " primary: it is not active"sv;
+      } else if (const auto status = move_active_displays([offset = mode.dmPosition](const std::wstring &, POINTL position) {
+                   return POINTL {position.x - offset.x, position.y - offset.y};
+                 });
+                 status != ERROR_SUCCESS) {
+        BOOST_LOG(warning) << "Couldn't make display "sv << utf_utils::to_utf8(device_name) << " primary ("sv << status << ')';
       }
     }
+
+    std::mutex primary_mutex;
+    std::wstring home_primary;  ///< The primary display before the first claim, primary again after the last.
+    std::vector<std::wstring> primary_claims;  ///< Displays streamed from, newest last; the newest is primary.
 
     /**
      * @brief Open the driver once and keep its watchdog fed; SudoVDA removes its displays when it is not pinged.
@@ -298,6 +316,64 @@ namespace platf {
       sudovda_displays.erase(display);
     } else {
       BOOST_LOG(warning) << "Not a SudoVDA virtual display: ["sv << output_name << ']';
+    }
+  }
+
+  bool move_displays(const std::map<std::string, POINTL> &positions) {
+    // The primary display stays at 0,0, or Windows refuses the layout (ERROR_INVALID_PARAMETER):
+    // moving it moves everything else the other way
+    const auto primary = positions.find(primary_display());
+    const auto shift = primary != positions.end() ? primary->second : POINTL {0, 0};
+    const auto status = move_active_displays([&positions, shift](const std::wstring &name, POINTL position) {
+      const auto wanted = positions.find(utf_utils::to_utf8(name));
+      const auto moved = wanted != positions.end() ? wanted->second : position;
+      return POINTL {moved.x - shift.x, moved.y - shift.y};
+    });
+    if (status != ERROR_SUCCESS) {
+      BOOST_LOG(warning) << "Couldn't move "sv << positions.size() << " displays ("sv << status << ')';
+    }
+    return status == ERROR_SUCCESS;
+  }
+
+  std::string primary_display() {
+    std::string name;
+    if (MONITORINFOEXW primary {}; (primary.cbSize = sizeof(MONITORINFOEXW), GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &primary))) {
+      name = utf_utils::to_utf8(primary.szDevice);
+    }
+    return name;
+  }
+
+  void claim_primary_display(const std::string &output_name) {
+    std::lock_guard lock {primary_mutex};
+    const auto name {utf_utils::from_utf8(output_name)};
+    if (primary_claims.empty()) {
+      // A virtual display a saved layout made primary is gone with the stream, no place to return to
+      const auto primary = primary_display();
+      std::lock_guard sudovda_lock {sudovda_mutex};
+      home_primary = sudovda_displays.contains(primary) ? std::wstring {} : utf_utils::from_utf8(primary);
+    }
+    std::erase(primary_claims, name);
+    primary_claims.push_back(name);
+    if (primary_display() != output_name) {
+      BOOST_LOG(info) << "Making streamed display "sv << output_name << " primary"sv;
+      make_primary(name.c_str());
+      if (const auto primary = primary_display(); primary != output_name) {
+        BOOST_LOG(warning) << "Expected "sv << output_name << " to be the primary display, it is "sv << primary;
+      }
+    }
+  }
+
+  void release_primary_display(const std::string &output_name) {
+    std::lock_guard lock {primary_mutex};
+    if (std::erase(primary_claims, utf_utils::from_utf8(output_name)) != 0) {
+      const auto next {primary_claims.empty() ? home_primary : primary_claims.back()};
+      if (const auto next_name {utf_utils::to_utf8(next)}; !next.empty() && primary_display() != next_name) {
+        BOOST_LOG(info) << "Making display "sv << next_name << " primary again"sv;
+        make_primary(next.c_str());
+      }
+      if (primary_claims.empty()) {
+        home_primary.clear();
+      }
     }
   }
 }  // namespace platf

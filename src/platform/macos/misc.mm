@@ -603,6 +603,30 @@ namespace platf {
     return false;
   }
 
+  bool host_cursor_hidden() {
+    return false;
+  }
+
+  std::pair<int, int> desktop_origin() {
+    return {0, 0};
+  }
+
+  std::vector<host_tray_icon_t> host_tray_icons() {
+    return {};
+  }
+
+  bool click_host_tray_icon([[maybe_unused]] std::size_t index, [[maybe_unused]] bool right) {
+    return false;
+  }
+
+  bool secure_desktop_active() {
+    return false;
+  }
+
+  std::string coherence_capture_output(const std::string &output_name) {
+    return output_name;
+  }
+
   std::vector<host_app_t> pinned_host_apps() {
     return {};
   }
@@ -622,6 +646,12 @@ namespace platf {
     } else {
       BOOST_LOG(warning) << "Not a virtual display id: ["sv << output_name << ']';
     }
+  }
+
+  void claim_primary_display([[maybe_unused]] const std::string &output_name) {
+  }
+
+  void release_primary_display([[maybe_unused]] const std::string &output_name) {
   }
 
   static pid_t g_restart_child_pid = 0;  ///< PID of the restarted child process for signal forwarding.

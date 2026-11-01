@@ -22,6 +22,7 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/xml_parser.hpp>
+#include <Simple-Web-Server/crypto.hpp>
 #include <Simple-Web-Server/server_http.hpp>
 
 // local includes
@@ -1489,6 +1490,10 @@ namespace nvhttp {
         if ((atlas = platf::coherence_atlas(last_verified_client_cert))) {
           root.put("AtlasWidth", atlas->width);
           root.put("AtlasHeight", atlas->height);
+          // The atlas stream shows the primary display meanwhile, which the client shows whole
+          if (platf::secure_desktop_active()) {
+            root.put("SecureDesktop", 1);
+          }
         }
       }
 
@@ -1641,6 +1646,38 @@ namespace nvhttp {
     response->close_connection_after_response = true;
   }
 
+  /**
+   * @brief Coherence mode's tray: the host's pinned notification area icons in order, each with
+   *        its tooltip and picture (PNG, base64), which a client polls and shows as its own.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void tray_icons(resp_https_t response, req_https_t request) {
+    pt::ptree tree;
+    auto g = util::fail_guard([&tree, &response]() {
+      std::ostringstream data;
+
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+    });
+
+    auto &root = tree.add_child("root", pt::ptree {});
+    if ((client_permissions(last_verified_client_cert) & permission::list) != permission::list) {
+      root.put("<xmlattr>.status_code", 401);
+      root.put("<xmlattr>.status_message", "This client may not list the host's tray icons");
+    } else {
+      root.put("<xmlattr>.status_code", 200);
+      for (const auto &icon : platf::host_tray_icons()) {
+        pt::ptree node;
+        node.put("Name", icon.name);
+        node.put("Icon", SimpleWeb::Crypto::Base64::encode(icon.png));
+        root.push_back(std::make_pair("TrayIcon", node));
+      }
+    }
+  }
+
   void pinned_app_icon(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -1729,7 +1766,8 @@ namespace nvhttp {
   /**
    * @brief Coherence mode's actions for a client: op=stop ends it, its coherence screen goes and
    *        with it the windows go back to the host's own displays; op=startmenu opens the Start
-   *        menu on its coherence screen.
+   *        menu on its coherence screen; op=trayclick clicks the pinned tray icon at index, with
+   *        button=right for its menu.
    *
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
@@ -1748,6 +1786,11 @@ namespace nvhttp {
       platf::release_coherence_screen(last_verified_client_cert);
     } else if (get_arg(args, "op", "") == "startmenu") {
       if (!platf::open_coherence_start_menu(last_verified_client_cert)) {
+        status = SimpleWeb::StatusCode::client_error_not_found;
+      }
+    } else if (get_arg(args, "op", "") == "trayclick") {
+      const auto index {std::strtoull(get_arg(args, "index", "0").c_str(), nullptr, 10)};
+      if (!platf::click_host_tray_icon(index, get_arg(args, "button", "left") == "right")) {
         status = SimpleWeb::StatusCode::client_error_not_found;
       }
     } else {
@@ -2188,6 +2231,7 @@ namespace nvhttp {
     https_server.resource["^/windows$"]["GET"] = windows;
     https_server.resource["^/windows/position$"]["GET"] = window_position;
     https_server.resource["^/windows/icon$"]["GET"] = window_icon;
+    https_server.resource["^/windows/tray$"]["GET"] = tray_icons;
     https_server.resource["^/pinnedapps$"]["GET"] = pinned_apps;
     https_server.resource["^/pinnedapps/icon$"]["GET"] = pinned_app_icon;
     https_server.resource["^/actions/launch$"]["GET"] = launch_pinned_app;

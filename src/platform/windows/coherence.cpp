@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -369,28 +370,21 @@ namespace platf {
       }, reinterpret_cast<LPARAM>(&edge));
       const auto left {edge.right};
 
+      std::map<std::string, POINTL> positions;
       for (const auto &display : displays) {
-        DEVMODEW mode {};
-        mode.dmSize = sizeof(mode);
-        const auto name {utf_utils::from_utf8(display.output_name)};
-        if (EnumDisplaySettingsW(name.c_str(), ENUM_CURRENT_SETTINGS, &mode)) {
-          const auto above {std::ranges::count_if(displays, [&display](const coherence_display_t &other) {
-            return other.client.y + other.client.height <= display.client.y;
-          })};
-          mode.dmFields = DM_POSITION;
-          mode.dmPosition = POINTL {left + display.client.x, display.client.y + static_cast<LONG>(above) * taskbar_height};
-          if (const auto status {ChangeDisplaySettingsExW(name.c_str(), &mode, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET, nullptr)}; status != DISP_CHANGE_SUCCESSFUL) {
-            BOOST_LOG(warning) << "Couldn't place coherence screen "sv << display.output_name << ": "sv << status;
-          }
-        }
+        const auto above {std::ranges::count_if(displays, [&display](const coherence_display_t &other) {
+          return other.client.y + other.client.height <= display.client.y;
+        })};
+        positions.emplace(display.output_name, POINTL {left + display.client.x, display.client.y + static_cast<LONG>(above) * taskbar_height});
       }
-      ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
+      move_displays(positions);
     }
 
     /**
-     * @brief Move a window onto a coherence screen, keeping its offset in the work area it was
-     *        on and shrinking it to fit; a maximized window is maximized there again. Windows on
-     *        any coherence screen stay, minimized ones until restored: the next gathering moves them.
+     * @brief Move a window onto a coherence screen at its size, keeping its offset in the work
+     *        area it was on as far as it fits; a maximized window is maximized there again.
+     *        Windows on any coherence screen stay, minimized ones until restored: the next
+     *        gathering moves them.
      */
     void gather_window(HWND hwnd, const std::vector<placed_display_t> &placed, std::map<HWND, WINDOWPLACEMENT> &home) {
       const auto monitor {MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)};
@@ -413,15 +407,12 @@ namespace platf {
         RECT frame {};
         RECT window_rect {};
         if (MONITORINFO info {.cbSize = sizeof(MONITORINFO)}; GetMonitorInfoW(monitor, &info) && GetWindowRect(hwnd, &window_rect) && SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) {
-          const auto width {std::min<LONG>(frame.right - frame.left, work_width)};
-          const auto height {std::min<LONG>(frame.bottom - frame.top, work_height)};
-          const auto left {screen.left + std::clamp<LONG>(frame.left - info.rcWork.left, 0, work_width - width)};
-          const auto top {screen.top + std::clamp<LONG>(frame.top - info.rcWork.top, 0, work_height - height)};
-          const auto border_left {frame.left - window_rect.left};
-          const auto border_top {frame.top - window_rect.top};
-          const auto border_width {(window_rect.right - window_rect.left) - (frame.right - frame.left)};
-          const auto border_height {(window_rect.bottom - window_rect.top) - (frame.bottom - frame.top)};
-          if (!SetWindowPos(hwnd, nullptr, left - border_left, top - border_top, width + border_width, height + border_height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS)) {
+          // A window larger than the screen keeps its top left corner on it
+          const auto width {frame.right - frame.left};
+          const auto height {frame.bottom - frame.top};
+          const auto left {screen.left + std::clamp<LONG>(frame.left - info.rcWork.left, 0, std::max<LONG>(work_width - width, 0))};
+          const auto top {screen.top + std::clamp<LONG>(frame.top - info.rcWork.top, 0, std::max<LONG>(work_height - height, 0))};
+          if (!SetWindowPos(hwnd, nullptr, left - (frame.left - window_rect.left), top - (frame.top - window_rect.top), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS)) {
             BOOST_LOG(warning) << "Couldn't move window "sv << reinterpret_cast<std::uintptr_t>(hwnd) << " onto the coherence screen: "sv << GetLastError();
           }
         }
@@ -431,11 +422,20 @@ namespace platf {
       }
     }
 
-    // Removing the screens alone would leave every gathered window on the primary display
+    // Removing the screens alone would leave every gathered window on the primary display. A
+    // window goes back to its place at the size it has now, maximized if it is now or was there
     void send_windows_home(const coherence_client_t &client) {
-      for (const auto &[hwnd, placement] : client.home) {
-        if (IsWindow(hwnd) && !SetWindowPlacement(hwnd, &placement)) {
-          BOOST_LOG(warning) << "Couldn't put window "sv << reinterpret_cast<std::uintptr_t>(hwnd) << " back where it was: "sv << GetLastError();
+      for (const auto &[hwnd, home] : client.home) {
+        if (WINDOWPLACEMENT now {.length = sizeof(WINDOWPLACEMENT)}; IsWindow(hwnd) && GetWindowPlacement(hwnd, &now)) {
+          auto placement {home};
+          placement.rcNormalPosition.right = home.rcNormalPosition.left + (now.rcNormalPosition.right - now.rcNormalPosition.left);
+          placement.rcNormalPosition.bottom = home.rcNormalPosition.top + (now.rcNormalPosition.bottom - now.rcNormalPosition.top);
+          if (now.showCmd == SW_SHOWMAXIMIZED) {
+            placement.showCmd = SW_SHOWMAXIMIZED;
+          }
+          if (!SetWindowPlacement(hwnd, &placement)) {
+            BOOST_LOG(warning) << "Couldn't put window "sv << reinterpret_cast<std::uintptr_t>(hwnd) << " back where it was: "sv << GetLastError();
+          }
         }
       }
     }
@@ -585,6 +585,158 @@ namespace platf {
         }
       }
       return bounds;
+    }
+
+    /**
+     * @brief A pinned notification area icon as UI Automation finds it.
+     */
+    struct tray_button_t {
+      std::wstring name;  ///< Its tooltip.
+      RECT button;  ///< On the desktop.
+      RECT image;  ///< On the desktop; the button's where the icon has no image child.
+    };
+
+    // Pinned icons are the NotifyItemIcon buttons of the primary taskbar; the system's own
+    // (network, volume, clock) and the hidden icons' chevron are SystemTrayIcon ones
+    constexpr const wchar_t *pinned_tray_icon_id {L"NotifyItemIcon"};
+
+    std::vector<tray_button_t> tray_buttons(IUIAutomation &automation) {
+      std::vector<tray_button_t> buttons;
+      IUIAutomationElement *taskbar {};
+      IUIAutomationCondition *condition {};
+      IUIAutomationCondition *any {};
+      IUIAutomationElementArray *found {};
+      if (const auto tray {FindWindowW(L"Shell_TrayWnd", nullptr)}; tray != nullptr && SUCCEEDED(automation.ElementFromHandle(tray, &taskbar)) && taskbar != nullptr) {
+        const com_ptr_t<IUIAutomationElement> taskbar_owner {taskbar};
+        VARIANT id;
+        VariantInit(&id);
+        id.vt = VT_BSTR;
+        id.bstrVal = SysAllocString(pinned_tray_icon_id);
+        const auto created {SUCCEEDED(automation.CreatePropertyCondition(UIA_AutomationIdPropertyId, id, &condition)) && condition != nullptr && SUCCEEDED(automation.CreateTrueCondition(&any)) && any != nullptr};
+        VariantClear(&id);
+        const com_ptr_t<IUIAutomationCondition> condition_owner {condition};
+        const com_ptr_t<IUIAutomationCondition> any_owner {any};
+        if (created && SUCCEEDED(taskbar->FindAll(TreeScope_Descendants, condition, &found)) && found != nullptr) {
+          const com_ptr_t<IUIAutomationElementArray> found_owner {found};
+          auto count {0};
+          found->get_Length(&count);
+          for (auto index {0}; index < count; ++index) {
+            if (IUIAutomationElement *button {}; SUCCEEDED(found->GetElement(index, &button)) && button != nullptr) {
+              const com_ptr_t<IUIAutomationElement> button_owner {button};
+              tray_button_t entry {};
+              if (BSTR name {}; SUCCEEDED(button->get_CurrentName(&name)) && name != nullptr) {
+                entry.name = name;
+                SysFreeString(name);
+              }
+              if (SUCCEEDED(button->get_CurrentBoundingRectangle(&entry.button)) && !IsRectEmpty(&entry.button)) {
+                entry.image = entry.button;
+                if (IUIAutomationElement *image {}; SUCCEEDED(button->FindFirst(TreeScope_Children, any, &image)) && image != nullptr) {
+                  const com_ptr_t<IUIAutomationElement> image_owner {image};
+                  if (RECT rect {}; SUCCEEDED(image->get_CurrentBoundingRectangle(&rect)) && !IsRectEmpty(&rect)) {
+                    entry.image = rect;
+                  }
+                }
+                buttons.push_back(std::move(entry));
+              }
+            }
+          }
+        }
+      }
+      return buttons;
+    }
+
+    // Pixels this close to the taskbar's colour (the largest channel difference) are its
+    // background, transparent; up to the opaque limit they fade in, which keeps antialiased edges
+    constexpr int tray_background_tolerance {12};
+    constexpr int tray_opaque_difference {48};
+
+    /**
+     * @brief A rectangle of the screen as PNG, with the colour just outside it transparent: the
+     *        taskbar behind a tray icon.
+     */
+    std::string tray_image_png(const RECT &image) {
+      std::string png;
+      const auto width {image.right - image.left};
+      const auto height {image.bottom - image.top};
+      BITMAPINFO info {};
+      info.bmiHeader = {.biSize = sizeof(BITMAPINFOHEADER), .biWidth = width, .biHeight = -height, .biPlanes = 1, .biBitCount = 32, .biCompression = BI_RGB};
+      void *bits {};
+      const auto screen {GetDC(nullptr)};
+      const auto memory {CreateCompatibleDC(screen)};
+      if (const auto bitmap {CreateDIBSection(memory, &info, DIB_RGB_COLORS, &bits, nullptr, 0)}; bitmap != nullptr) {
+        const auto previous {SelectObject(memory, bitmap)};
+        const auto background {GetPixel(screen, image.left - 1, image.top - 1)};
+        if (BitBlt(memory, 0, 0, width, height, screen, image.left, image.top, SRCCOPY | CAPTUREBLT) && background != CLR_INVALID) {
+          auto *pixels {static_cast<std::uint8_t *>(bits)};
+          for (auto offset {0}; offset < width * height * 4; offset += 4) {
+            const auto difference {std::max({std::abs(pixels[offset] - GetBValue(background)), std::abs(pixels[offset + 1] - GetGValue(background)), std::abs(pixels[offset + 2] - GetRValue(background))})};
+            pixels[offset + 3] = static_cast<std::uint8_t>(std::clamp((difference - tray_background_tolerance) * 255 / (tray_opaque_difference - tray_background_tolerance), 0, 255));
+          }
+          SelectObject(memory, previous);
+          png = bitmap_png(bitmap);
+        } else {
+          SelectObject(memory, previous);
+        }
+        DeleteObject(bitmap);
+      }
+      DeleteDC(memory);
+      ReleaseDC(nullptr, screen);
+      return png;
+    }
+
+    // Tray icons open their menus and windows on the taskbar's edge, where the Mac's Dock covers
+    // them; the Mac's tray is its menu bar, so for a while after a click, what shows up on that
+    // edge (within the margin) moves to the top of the screen
+    constexpr auto tray_popup_watch {std::chrono::seconds {2}};
+    constexpr auto tray_popup_poll {std::chrono::milliseconds {50}};
+    constexpr LONG tray_popup_margin {24};
+
+    std::set<HWND> visible_windows() {
+      std::set<HWND> windows;
+      EnumWindows([](HWND hwnd, LPARAM windows_param) -> BOOL {
+        if (IsWindowVisible(hwnd)) {
+          reinterpret_cast<std::set<HWND> *>(windows_param)->insert(hwnd);
+        }
+        return TRUE;
+      }, reinterpret_cast<LPARAM>(&windows));
+      return windows;
+    }
+
+    void move_tray_popups_up(std::set<HWND> shown_before, HMONITOR monitor) {
+      std::thread {[shown_before = std::move(shown_before), monitor]() {
+        std::set<HWND> moved;
+        MONITORINFO info {.cbSize = sizeof(MONITORINFO)};
+        const auto deadline {std::chrono::steady_clock::now() + tray_popup_watch};
+        while (GetMonitorInfoW(monitor, &info) && std::chrono::steady_clock::now() < deadline) {
+          for (const auto hwnd : visible_windows()) {
+            if (RECT rect {}; !shown_before.contains(hwnd) && !moved.contains(hwnd) && MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) == monitor && GetWindowRect(hwnd, &rect) && rect.bottom >= info.rcWork.bottom - tray_popup_margin) {
+              moved.insert(hwnd);
+              if (!SetWindowPos(hwnd, nullptr, rect.left, info.rcWork.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS)) {
+                BOOST_LOG(warning) << "Couldn't move tray window "sv << reinterpret_cast<std::uintptr_t>(hwnd) << " to the top: "sv << GetLastError();
+              }
+            }
+          }
+          std::this_thread::sleep_for(tray_popup_poll);
+        }
+      }}.detach();
+    }
+
+    // A real press: neither Start nor the tray icons offer an invoke pattern that opens them
+    bool click_at(POINT point, bool right) {
+      const auto left {GetSystemMetrics(SM_XVIRTUALSCREEN)};
+      const auto top {GetSystemMetrics(SM_YVIRTUALSCREEN)};
+      const auto width {GetSystemMetrics(SM_CXVIRTUALSCREEN)};
+      const auto height {GetSystemMetrics(SM_CYVIRTUALSCREEN)};
+      std::array<INPUT, 3> inputs {};
+      for (auto &input : inputs) {
+        input.type = INPUT_MOUSE;
+        input.mi.dx = MulDiv(point.x - left, 65535, width - 1);
+        input.mi.dy = MulDiv(point.y - top, 65535, height - 1);
+      }
+      inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+      inputs[1].mi.dwFlags = (right ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN) | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+      inputs[2].mi.dwFlags = (right ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP) | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+      return SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) == inputs.size();
     }
 
     /**
@@ -978,6 +1130,45 @@ namespace platf {
     return windows;
   }
 
+  bool secure_desktop_active() {
+    auto active {false};
+    if (auto desktop {OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS)}; desktop != nullptr) {
+      std::array<wchar_t, 64> name {};
+      GetUserObjectInformationW(desktop, UOI_NAME, name.data(), static_cast<DWORD>(name.size() * sizeof(wchar_t)), nullptr);
+      active = std::wstring_view {name.data()} != L"Default";
+      CloseDesktop(desktop);
+    } else {
+      // A server running as the user may not open Winlogon's desktop at all
+      active = GetLastError() == ERROR_ACCESS_DENIED;
+    }
+    return active;
+  }
+
+  std::string coherence_capture_output(const std::string &output_name) {
+    auto capture {output_name};
+    if (!output_name.empty() && secure_desktop_active()) {
+      std::lock_guard lock {coherence_mutex};
+      if (std::ranges::any_of(coherence_clients, [&output_name](const auto &client) {
+            return client.second.atlas && client.second.atlas->output_name == output_name;
+          })) {
+        if (const auto primary {primary_display()}; !primary.empty()) {
+          capture = primary;
+          BOOST_LOG(info) << "The secure desktop shows: coherence atlas "sv << output_name << " captures the primary display "sv << capture;
+        }
+      }
+    }
+    return capture;
+  }
+
+  std::pair<int, int> desktop_origin() {
+    return {GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN)};
+  }
+
+  bool host_cursor_hidden() {
+    CURSORINFO info {.cbSize = sizeof(CURSORINFO)};
+    return GetCursorInfo(&info) && !(info.flags & CURSOR_SHOWING);
+  }
+
   bool close_host_window(std::uint64_t id) {
     const auto hwnd {window_handle(id)};
     return IsWindow(hwnd) && PostMessageW(hwnd, WM_CLOSE, 0, 0) != FALSE;
@@ -1123,6 +1314,7 @@ namespace platf {
         })) {
       home = std::move(client->second.home);
       atlas = std::move(client->second.atlas);
+      release_primary_display(client->second.displays.front().output_name);
       for (const auto &display : client->second.displays) {
         virtual_display_destroy(display.output_name);
       }
@@ -1149,6 +1341,8 @@ namespace platf {
         } else {
           atlas = make_atlas(client_id, screens.front().width, screens.front().height, displays);
         }
+        // After the atlas display: Windows lays out a new set of displays as it last saved it
+        claim_primary_display(displays.front().output_name);
         client = coherence_clients.emplace(client_id, coherence_client_t {displays, std::move(home), std::move(atlas)}).first;
       } else {
         BOOST_LOG(warning) << "Expected a coherence screen for each of the client's "sv << screens.size() << " screens, made "sv << displays.size();
@@ -1179,6 +1373,7 @@ namespace platf {
         destroy_atlas(*client->second.atlas);
       }
       send_windows_home(client->second);
+      release_primary_display(client->second.displays.front().output_name);
       for (const auto &display : client->second.displays) {
         virtual_display_destroy(display.output_name);
       }
@@ -1231,7 +1426,24 @@ namespace platf {
           }
           const auto client_x {static_cast<int>(std::clamp(x, 0.0f, width) * right / width)};
           const auto client_y {static_cast<int>(std::clamp(y, 0.0f, height) * bottom / height)};
-          if (const auto host {host_point(place_displays(client.displays), client_x, client_y)}; host) {
+
+          // On the secure desktop the stream shows the primary display, fitted into the stream
+          // and that again into the client's primary screen, each centered as large as it fits
+          MONITORINFO info {.cbSize = sizeof(MONITORINFO)};
+          if (secure_desktop_active() && GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &info)) {
+            const auto &screen {client.displays.front().client};
+            const auto stream_width {static_cast<float>(client.atlas->width)};
+            const auto stream_height {static_cast<float>(client.atlas->height)};
+            const auto primary_width {static_cast<float>(info.rcMonitor.right - info.rcMonitor.left)};
+            const auto primary_height {static_cast<float>(info.rcMonitor.bottom - info.rcMonitor.top)};
+            const auto client_scale {std::min(screen.width / stream_width, screen.height / stream_height)};
+            const auto frame_x {(client_x - screen.x - (screen.width - stream_width * client_scale) / 2) / client_scale};
+            const auto frame_y {(client_y - screen.y - (screen.height - stream_height * client_scale) / 2) / client_scale};
+            const auto stream_scale {std::min(stream_width / primary_width, stream_height / primary_height)};
+            const auto host_x {(frame_x - (stream_width - primary_width * stream_scale) / 2) / stream_scale};
+            const auto host_y {(frame_y - (stream_height - primary_height * stream_scale) / 2) / stream_scale};
+            point = std::make_pair(info.rcMonitor.left + std::clamp(host_x, 0.0f, primary_width - 1), info.rcMonitor.top + std::clamp(host_y, 0.0f, primary_height - 1));
+          } else if (const auto host {host_point(place_displays(client.displays), client_x, client_y)}; host) {
             point = std::make_pair(static_cast<float>(host->first), static_cast<float>(host->second));
           }
         }
@@ -1250,32 +1462,24 @@ namespace platf {
       }
     }
 
-    // A real press: the button offers no invoke pattern
     const auto com_initialized {SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))};
     if (screen_rect) {
       const auto monitor {MonitorFromRect(&*screen_rect, MONITOR_DEFAULTTONULL)};
-      HWND tray {};
-      for (auto candidate {FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr)}; candidate != nullptr; candidate = FindWindowExW(nullptr, candidate, L"Shell_SecondaryTrayWnd", nullptr)) {
-        if (MonitorFromWindow(candidate, MONITOR_DEFAULTTONULL) == monitor) {
-          tray = candidate;
-        }
-      }
-      if (const auto automation {tray != nullptr ? make_automation() : nullptr}; automation) {
-        if (const auto button {automation_element_bounds(*automation, tray, L"StartButton")}; button) {
-          const auto left {GetSystemMetrics(SM_XVIRTUALSCREEN)};
-          const auto top {GetSystemMetrics(SM_YVIRTUALSCREEN)};
-          const auto width {GetSystemMetrics(SM_CXVIRTUALSCREEN)};
-          const auto height {GetSystemMetrics(SM_CYVIRTUALSCREEN)};
-          std::array<INPUT, 3> inputs {};
-          for (auto &input : inputs) {
-            input.type = INPUT_MOUSE;
-            input.mi.dx = MulDiv((button->left + button->right) / 2 - left, 65535, width - 1);
-            input.mi.dy = MulDiv((button->top + button->bottom) / 2 - top, 65535, height - 1);
+      // The coherence screen is primary, with the main taskbar, whose Start button UI Automation
+      // does not list; the shell opens Start there on SC_TASKLIST, as on the Win key
+      if (const auto tray {FindWindowW(L"Shell_TrayWnd", nullptr)}; tray != nullptr && MonitorFromWindow(tray, MONITOR_DEFAULTTONULL) == monitor) {
+        opened = PostMessageW(tray, WM_SYSCOMMAND, SC_TASKLIST, 0) != FALSE;
+      } else {
+        HWND secondary {};
+        for (auto candidate {FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr)}; candidate != nullptr; candidate = FindWindowExW(nullptr, candidate, L"Shell_SecondaryTrayWnd", nullptr)) {
+          if (MonitorFromWindow(candidate, MONITOR_DEFAULTTONULL) == monitor) {
+            secondary = candidate;
           }
-          inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-          inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-          inputs[2].mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-          opened = SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) == inputs.size();
+        }
+        if (const auto automation {secondary != nullptr ? make_automation() : nullptr}; automation) {
+          if (const auto button {automation_element_bounds(*automation, secondary, L"StartButton")}; button) {
+            opened = click_at({(button->left + button->right) / 2, (button->top + button->bottom) / 2}, false);
+          }
         }
       }
     }
@@ -1286,6 +1490,56 @@ namespace platf {
       BOOST_LOG(warning) << "Expected the Start button of the client's coherence screen to press, found "sv << (screen_rect ? "none"sv : "no coherence screen"sv);
     }
     return opened;
+  }
+
+  std::vector<host_tray_icon_t> host_tray_icons() {
+    // A window over the taskbar covers the icons the picture is taken of; their last picture
+    // stands in then, by place
+    static std::mutex cache_mutex;
+    static std::vector<std::string> last_pictures;
+
+    std::vector<host_tray_icon_t> icons;
+    // UI Automation and WIC are COM, and an HTTP worker thread has no apartment of its own
+    const auto com_initialized {SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))};
+    if (const auto automation {make_automation()}; automation) {
+      const auto tray {FindWindowW(L"Shell_TrayWnd", nullptr)};
+      const auto buttons {tray_buttons(*automation)};
+      std::lock_guard lock {cache_mutex};
+      last_pictures.resize(buttons.size());
+      for (std::size_t index {0}; index < buttons.size(); ++index) {
+        const auto &image {buttons[index].image};
+        if (const POINT center {(image.left + image.right) / 2, (image.top + image.bottom) / 2}; GetAncestor(WindowFromPoint(center), GA_ROOT) == tray) {
+          last_pictures[index] = tray_image_png(image);
+        }
+        icons.push_back({utf_utils::to_utf8(buttons[index].name), last_pictures[index]});
+      }
+    }
+    if (com_initialized) {
+      CoUninitialize();
+    }
+    return icons;
+  }
+
+  bool click_host_tray_icon(std::size_t index, bool right) {
+    auto clicked {false};
+    const auto com_initialized {SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))};
+    if (const auto automation {make_automation()}; automation) {
+      if (const auto buttons {tray_buttons(*automation)}; index < buttons.size()) {
+        const auto &button {buttons[index].button};
+        const POINT center {(button.left + button.right) / 2, (button.top + button.bottom) / 2};
+        auto shown_before {visible_windows()};
+        clicked = click_at(center, right);
+        if (clicked) {
+          move_tray_popups_up(std::move(shown_before), MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST));
+        }
+      } else {
+        BOOST_LOG(warning) << "Expected a pinned tray icon at "sv << index << ", the taskbar has "sv << buttons.size();
+      }
+    }
+    if (com_initialized) {
+      CoUninitialize();
+    }
+    return clicked;
   }
 
   std::vector<std::string> idle_coherence_clients(std::chrono::seconds timeout) {

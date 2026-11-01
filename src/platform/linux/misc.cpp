@@ -661,6 +661,12 @@ namespace platf {
     // A portal virtual monitor ends with the stream that capture opened for it
   }
 
+  void claim_primary_display([[maybe_unused]] const std::string &output_name) {
+  }
+
+  void release_primary_display([[maybe_unused]] const std::string &output_name) {
+  }
+
   std::string get_clipboard() {
     return {};
   }
@@ -726,6 +732,30 @@ namespace platf {
 
   bool close_host_window(std::uint64_t /*id*/) {
     return false;
+  }
+
+  bool host_cursor_hidden() {
+    return false;
+  }
+
+  std::pair<int, int> desktop_origin() {
+    return {0, 0};
+  }
+
+  std::vector<host_tray_icon_t> host_tray_icons() {
+    return {};
+  }
+
+  bool click_host_tray_icon([[maybe_unused]] std::size_t index, [[maybe_unused]] bool right) {
+    return false;
+  }
+
+  bool secure_desktop_active() {
+    return false;
+  }
+
+  std::string coherence_capture_output(const std::string &output_name) {
+    return output_name;
   }
 
   std::vector<host_app_t> pinned_host_apps() {

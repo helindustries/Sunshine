@@ -34,6 +34,7 @@ extern "C" {
 #include "input.h"
 #include "logging.h"
 #include "nvenc/nvenc_encoder.h"
+#include "platform/coherence.h"
 #include "platform/common.h"
 #include "sync.h"
 #include "video.h"
@@ -1539,7 +1540,7 @@ namespace video {
     // A session's own display needs no enumeration, which tests duplication on every display: seconds
     // each, 45 s for five displays on a busy host (2026-11-01), longer than a client waits for video
     if (!requested_output_name.empty()) {
-      display_names = {requested_output_name};
+      display_names = {platf::coherence_capture_output(requested_output_name)};
       current_display_index = 0;
       return;
     }
