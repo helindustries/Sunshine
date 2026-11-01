@@ -1536,8 +1536,16 @@ namespace video {
    *                              display; empty selects the configured output_name.
    */
   void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index, const std::string &requested_output_name = {}) {
+    // A session's own display needs no enumeration, which tests duplication on every display: seconds
+    // each, 45 s for five displays on a busy host (2026-11-01), longer than a client waits for video
+    if (!requested_output_name.empty()) {
+      display_names = {requested_output_name};
+      current_display_index = 0;
+      return;
+    }
+
     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
-    const auto output_name {requested_output_name.empty() ? display_device::map_output_name(config::video.output_name) : requested_output_name};
+    const auto output_name {display_device::map_output_name(config::video.output_name)};
     std::string current_display_name;
 
     // If we have a current display index, let's start with that
@@ -1556,11 +1564,6 @@ namespace video {
       return;
     } else if (display_names.empty()) {
       display_names.emplace_back(output_name);
-    }
-
-    // A display created for a session moments ago may not be enumerated yet
-    if (!requested_output_name.empty() && std::ranges::find(display_names, requested_output_name) == display_names.end()) {
-      display_names.emplace_back(requested_output_name);
     }
 
     // We now have a new display name list, so reset the index back to 0
