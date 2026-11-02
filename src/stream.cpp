@@ -2281,12 +2281,13 @@ namespace stream {
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
 
+      const auto remaining_sessions {--running_sessions};
       if (!session.config.monitor.output_name.empty()) {
-        display_device::release_virtual_display(session.config.monitor.output_name);
+        display_device::release_virtual_display(session.config.monitor.output_name, remaining_sessions > 0);
       }
 
       // If this is the last session, invoke the platform callbacks
-      if (--running_sessions == 0) {
+      if (remaining_sessions == 0) {
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
         if (proc::proc.running()) {
           // Virtual displays stay while the app runs, so a reconnecting client finds its windows

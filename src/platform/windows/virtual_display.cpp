@@ -193,6 +193,9 @@ namespace platf {
       }
     }
 
+    constexpr auto primary_attempts = 10;
+    constexpr auto primary_attempt_delay = 200ms;
+
     std::mutex primary_mutex;
     std::wstring home_primary;  ///< The primary display before the first claim, primary again after the last.
     std::vector<std::wstring> primary_claims;  ///< Displays streamed from, newest last; the newest is primary.
@@ -369,7 +372,16 @@ namespace platf {
       const auto next {primary_claims.empty() ? home_primary : primary_claims.back()};
       if (const auto next_name {utf_utils::to_utf8(next)}; !next.empty() && primary_display() != next_name) {
         BOOST_LOG(info) << "Making display "sv << next_name << " primary again"sv;
+        // Right after a display is removed the set is still changing (ERROR_GEN_FAILURE), and
+        // Windows then lays out the displays left as it saved them, its own primary included
         make_primary(next.c_str());
+        for (auto attempt = 1; attempt < primary_attempts && primary_display() != next_name; ++attempt) {
+          std::this_thread::sleep_for(primary_attempt_delay);
+          make_primary(next.c_str());
+        }
+        if (const auto primary = primary_display(); primary != next_name) {
+          BOOST_LOG(warning) << "Expected "sv << next_name << " to be the primary display again, it is "sv << primary;
+        }
       }
       if (primary_claims.empty()) {
         home_primary.clear();

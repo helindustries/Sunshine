@@ -1080,10 +1080,20 @@ namespace display_device {
     return output_name;
   }
 
-  void release_virtual_display(const std::string &output_name) {
-    std::lock_guard lock {virtual_screens_mutex};
+  void release_virtual_display(const std::string &output_name, const bool destroy) {
+    std::unique_lock lock {virtual_screens_mutex};
     if (auto screen = std::ranges::find(virtual_screens, output_name, &virtual_screen_t::output_name); screen != virtual_screens.end()) {
-      screen->in_use = false;
+      if (destroy) {
+        // Windows lays out the displays left as it last saved them, primary included: the
+        // release afterwards makes the remaining streams' display primary again
+        BOOST_LOG(info) << "Destroying virtual display "sv << output_name;
+        platf::virtual_display_destroy(output_name);
+        virtual_screens.erase(screen);
+      } else {
+        screen->in_use = false;
+      }
+      // It may wait for the display set to settle, other sessions need not
+      lock.unlock();
       platf::release_primary_display(output_name);
     }
   }

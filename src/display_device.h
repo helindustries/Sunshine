@@ -157,10 +157,11 @@ namespace display_device {
   int choose_virtual_display_slot(std::uint32_t identity, const std::set<int> &used, std::map<std::uint32_t, int> &known, int slot_count);
 
   /**
-   * @brief Mark a session's virtual display as free for its client to reconnect to.
+   * @brief Mark a session's virtual display as free for its client to reconnect to, or destroy it.
    * @param output_name Output name returned by acquire_virtual_display().
+   * @param destroy Destroy it instead, as other sessions stream on and would only lose windows to it.
    */
-  void release_virtual_display(const std::string &output_name);
+  void release_virtual_display(const std::string &output_name, bool destroy = false);
 
   /**
    * @brief The stream profiles a client has a virtual display for, streaming or free to resume.
