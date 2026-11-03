@@ -33,6 +33,13 @@ namespace platf {
   std::string primary_display();
 
   /**
+   * @brief Make the newest streamed display primary again after the console signed in or unlocked.
+   * @details Watches for a few seconds, as Windows applies the user's saved layout some time after
+   *          the session notification; blocks the calling thread meanwhile.
+   */
+  void reclaim_primary_display();
+
+  /**
    * @brief Move displays to the desktop positions given, by output name; the others stay.
    * @return Whether Windows took the arrangement.
    */

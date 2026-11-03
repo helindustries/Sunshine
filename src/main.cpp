@@ -46,6 +46,14 @@
 #include "upnp.h"
 #include "video.h"
 
+#ifdef _WIN32
+  // After the local includes: boost.asio needs WinSock2 ahead of Windows.h
+  #include "platform/windows/misc.h"
+
+  #include <thread>
+  #include <wtsapi32.h>
+#endif
+
 using namespace std::literals;
 
 std::map<int, std::function<void()>> signal_handlers;  ///< Signal handlers.
@@ -117,6 +125,13 @@ LRESULT CALLBACK SessionMonitorWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         lifetime::exit_sunshine(0, false);
         return 0;
       }
+    case WM_WTSSESSION_CHANGE:
+      // Signing in applies the user's saved display layout, which takes the primary display
+      // from a stream that connected at the sign-in or lock screen
+      if (wParam == WTS_SESSION_LOGON || wParam == WTS_SESSION_UNLOCK) {
+        std::thread {platf::reclaim_primary_display}.detach();
+      }
+      return 0;
     default:
       return DefWindowProc(hwnd, uMsg, wParam, lParam);
   }
@@ -354,6 +369,9 @@ int main(int argc, char *argv[]) {
     }
 
     ShowWindow(wnd, SW_HIDE);
+    if (!WTSRegisterSessionNotification(wnd, NOTIFY_FOR_ALL_SESSIONS)) {
+      BOOST_LOG(warning) << "Couldn't register for session notifications ("sv << GetLastError() << "), a sign-in may take the primary display from a stream"sv;
+    }
 
     // Run the message loop for our window
     MSG msg {};

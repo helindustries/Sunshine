@@ -195,6 +195,8 @@ namespace platf {
 
     constexpr auto primary_attempts = 10;
     constexpr auto primary_attempt_delay = 200ms;
+    constexpr auto reclaim_checks = 20;
+    constexpr auto reclaim_check_delay = 500ms;
 
     std::mutex primary_mutex;
     std::wstring home_primary;  ///< The primary display before the first claim, primary again after the last.
@@ -385,6 +387,19 @@ namespace platf {
       }
       if (primary_claims.empty()) {
         home_primary.clear();
+      }
+    }
+  }
+
+  void reclaim_primary_display() {
+    for (auto check = 0; check < reclaim_checks; ++check) {
+      std::this_thread::sleep_for(reclaim_check_delay);
+      std::lock_guard lock {primary_mutex};
+      if (!primary_claims.empty()) {
+        if (const auto claim {utf_utils::to_utf8(primary_claims.back())}; primary_display() != claim) {
+          BOOST_LOG(info) << "Making streamed display "sv << claim << " primary again after sign-in"sv;
+          make_primary(primary_claims.back().c_str());
+        }
       }
     }
   }
