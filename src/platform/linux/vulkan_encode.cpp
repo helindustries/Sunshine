@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <drm_fourcc.h>
 #include <map>
+#include <string_view>
 #include <sys/stat.h>
 #if defined(__FreeBSD__)
   #include <sys/types.h>
@@ -183,6 +184,17 @@ namespace vk {
     *max_level = 0;
 
     if (!vk_ctx || !vk_ctx->inst || !vk_ctx->phys_dev || !vk_ctx->get_proc_addr) {
+      return 0;
+    }
+
+    // The loader hands out these entry points for any device, and calling them on one without
+    // video encode (llvmpipe) jumps to null
+    const auto *extensions_end = vk_ctx->enabled_dev_extensions + vk_ctx->nb_enabled_dev_extensions;
+    if (std::none_of(vk_ctx->enabled_dev_extensions, extensions_end, [](const char *extension) {
+          return std::string_view(extension) == VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME;
+        })) {
+      BOOST_LOG(warning) << "[vulkan] Expected the device to enable "sv << VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME
+                         << ", it has no video encode; skipping the quality query"sv;
       return 0;
     }
 
