@@ -1538,7 +1538,7 @@ namespace video {
    */
   void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index, const std::string &requested_output_name = {}) {
     // A session's own display needs no enumeration, which tests duplication on every display: seconds
-    // each, 45 s for five displays on a busy host (2026-11-01), longer than a client waits for video
+    // each, which adds up past what a client waits for video
     if (!requested_output_name.empty()) {
       display_names = {platf::coherence_capture_output(requested_output_name)};
       current_display_index = 0;

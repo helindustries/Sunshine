@@ -675,7 +675,7 @@ namespace platf {
     return false;
   }
 
-  // Window capture on Linux is its own step of coherence mode; until then there are none to offer
+  // No window capture on Linux, so there are no windows to offer
   std::vector<host_window_t> host_windows() {
     return {};
   }

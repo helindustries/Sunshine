@@ -2288,8 +2288,8 @@ namespace nvhttp {
 
     // A client that dies in coherence mode stops asking for its windows; its screen goes as a
     // stopping client's would. Not during a launch, which holds the one HTTPS thread for the
-    // encoder test (22 s on 2026-11-01, minutes on a busy host) so that no list request gets
-    // through, nor while the client streams: a dead client's session ends by its ping timeout
+    // encoder test (minutes on a busy host) so that no list request gets through, nor while the
+    // client streams: a dead client's session ends by its ping timeout
     while (shutdown_event->running() && !shutdown_event->view(coherence_idle_check_interval)) {
       if (std::unique_lock launch_lock {launch_mutex, std::try_to_lock}; launch_lock.owns_lock() && !rtsp_stream::launch_pending()) {
         for (const auto &client : platf::idle_coherence_clients(coherence_idle_timeout)) {

@@ -1,7 +1,6 @@
 /**
  * @file src/platform/coherence.h
- * @brief Coherence mode's Start menu and program icons, apart from common.h so adding to it
- *        rebuilds one file.
+ * @brief Coherence mode's Start menu and program icons.
  */
 #pragma once
 

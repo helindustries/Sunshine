@@ -544,7 +544,7 @@ namespace platf {
     return [pasteboard setString:[NSString stringWithUTF8String:content.c_str()] forType:NSPasteboardTypeString];
   }
 
-  // Window capture on macOS is its own step of coherence mode; until then there are none to offer
+  // No window capture on macOS, so there are no windows to offer
   std::vector<host_window_t> host_windows() {
     return {};
   }

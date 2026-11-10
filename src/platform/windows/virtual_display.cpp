@@ -269,7 +269,7 @@ namespace platf {
       SUDOVDA::VIRTUAL_DISPLAY_ADD_OUT added;
       if (SUDOVDA::AddVirtualDisplay(sudovda_handle, width, height, fps, guid, "Sunshine", serial.c_str(), added)) {
         // The display reaches the active display configuration a while after the driver adds it,
-        // about 1.1 s on an Intel Iris Xe alone. Windows keeps it detached instead when the
+        // (over a second on an Intel Iris Xe). Windows keeps it detached instead when the
         // topology it saved for this set of displays has no place for it, so after a while the
         // topology is extended, as Win+P "Extend" would
         wchar_t device_name[CCHDEVICENAME] {};
